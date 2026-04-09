@@ -5,9 +5,20 @@ import os
 import sys
 import logging
 import re
+import hashlib
 
 
+# ================================
+# ETag计算
+# ================================
+def calc_file_md5(path, chunk_size=8 * 1024 * 1024):
+    md5 = hashlib.md5()
 
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(chunk_size), b""):
+            md5.update(chunk)
+
+    return md5.hexdigest()
 # ================================
 # size 解析
 # ================================
