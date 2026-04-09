@@ -1,0 +1,264 @@
+# core/uploader.py
+# -*- coding: utf-8 -*-
+
+import os
+import time
+import logging
+import threading
+import random
+
+
+from obs import ObsClient
+from .utils import fix_windows_path, safe_log, sanitize_key,clean_path_to_utf8
+
+_client = None
+_bucket = None
+_part_size = None
+_threshold = None
+_limiter = None
+
+
+
+
+
+def init_uploader(ak, sk, endpoint, bucket, part_size, threshold, rate_limit=200):
+    global _client, _bucket, _part_size, _threshold, _limiter
+
+    _client = ObsClient(
+        access_key_id=ak,
+        secret_access_key=sk,
+        server=endpoint
+    )
+
+    _bucket = bucket
+    _part_size = part_size
+    _threshold = threshold
+
+    from .ratelimiter import RateLimiter
+    _limiter = RateLimiter(rate_limit)
+
+
+class OBSUploader:
+
+    def __init__(self,progress,checkpoint,reporter=None,failed_dir="failed",enable_head_check=True,strict_client_check=True):
+
+        self.progress = progress
+        self.checkpoint = checkpoint
+        self.reporter = reporter
+        self.failed_dir = failed_dir
+
+        self.enable_head_check = enable_head_check
+        self.strict_client_check = strict_client_check
+
+        self.lock = threading.Lock()
+        os.makedirs(failed_dir, exist_ok=True)
+
+    # ==========================================================
+    # 核心上传
+    # ==========================================================
+    def upload(self, task):
+        if self.strict_client_check and _client is None:
+            raise RuntimeError("OBS client not initialized")
+
+        # =========================
+        # 原始路径（bytes，唯一可信）
+        # =========================
+        local_path_bytes = task["local"]
+
+        # ✅ 只用于日志展示（不会参与IO）
+        safe_local_str = clean_path_to_utf8(local_path_bytes)
+        safe_local_str = fix_windows_path(safe_local_str)
+
+        obs_key = sanitize_key(task["obs"]).strip("/")
+        logging.debug(f"[UPLOAD_KEY] {obs_key}")
+
+        size = task.get("size", 0)
+
+        # =========================
+        # 1️⃣ 文件 stat（必须用 bytes）
+        # =========================
+        try:
+            st = os.stat(local_path_bytes, follow_symlinks=False)
+            size = st.st_size
+            mtime = st.st_mtime
+
+        except FileNotFoundError:
+
+            # ⚠️ 再确认一次（防止误判）
+            if os.path.exists(local_path_bytes):
+                # 说明是编码/系统异常
+                logging.error(f"[BUG][ENCODING] {safe_log(local_path_bytes)}")
+                self._report(safe_local_str, obs_key, size, "ERROR", "encoding issue")
+            else:
+                # ✅ 真正不存在
+                logging.warning(f"[REAL_MISSING] {safe_local_str}")
+                self._report(safe_local_str, obs_key, size, "MISSING", "file not found")
+
+            self.progress.skip()
+            self.progress.add_done(size)
+            return
+
+        # =========================
+        # 2️⃣ HEAD 判断
+        # =========================
+        head_status = "UNKNOWN"  # NOT_EXIST / EXIST_SAME / EXIST_DIFF / ERROR
+
+        if self.enable_head_check:
+            try:
+                meta = _client.getObjectMetadata(_bucket, obs_key)
+
+                if meta.status < 300:
+                    remote_size = meta.body.contentLength
+
+                    if remote_size == size:
+                        head_status = "EXIST_SAME"
+                    else:
+                        head_status = "EXIST_DIFF"
+
+                elif meta.status == 404:
+                    head_status = "NOT_EXIST"
+                else:
+                    head_status = "ERROR"
+
+            except Exception as e:
+                logging.debug(f"[HEAD_FAIL] {obs_key} err={e}")
+                head_status = "ERROR"
+
+        # =========================
+        # 3️⃣ 决策逻辑（核心）
+        # =========================
+
+        # ✅ 远端已存在且一致 → 绝对跳过
+        if head_status == "EXIST_SAME":
+            self.progress.skip()
+            self.progress.add_done(size)
+
+            logging.info(
+                f"[UPLOAD_SKIP][OBS] {safe_local_str} -> {obs_key} size={size}"
+            )
+
+            self.checkpoint.mark_done(safe_local_str, size, mtime)
+
+            self._report(safe_local_str, obs_key, size, "SKIP", "already exists")
+            return
+
+        # ⚠️ HEAD失败 → 才允许用 checkpoint
+        if head_status == "ERROR" and self.enable_head_check:
+
+            if self.checkpoint.is_done(safe_local_str, size, mtime):
+                logging.warning(
+                    f"[CHECKPOINT_SKIP][HEAD_UNKNOWN] {safe_local_str}"
+                )
+
+                self.progress.skip()
+                self.progress.add_done(size)
+
+                self._report(safe_local_str, obs_key, size, "SKIP", "checkpoint")
+
+                return
+
+        # =========================
+        # 4️⃣ 上传（关键：路径转换）
+        # =========================
+        retry = 0
+        last_err = ""
+
+        # ⚠️ 这里只在上传时转换（OBS SDK必须用str）
+        local_str_for_upload = os.fsdecode(local_path_bytes)
+
+        while retry < 3:
+
+            start = time.time()
+
+            try:
+                if _limiter:
+                    tokens_needed = max(1, int(size / (512 * 1024)))
+                    _limiter.acquire(tokens_needed)
+
+                if size >= _threshold:
+                    resp = _client.uploadFile(
+                        _bucket,
+                        obs_key,
+                        local_str_for_upload,
+                        partSize=_part_size,
+                        taskNum=3,
+                        enableCheckpoint=True
+                    )
+                else:
+                    resp = _client.putFile(_bucket, obs_key, local_str_for_upload)
+
+                if resp.status < 300:
+                    cost = time.time() - start
+
+                    self.checkpoint.mark_done(safe_local_str, size, mtime)
+                    self.progress.add_done(size)
+
+                    logging.info(
+                        f"[UPLOAD_OK] {safe_local_str} -> {obs_key} "
+                        f"size={size} cost={cost:.2f}s"
+                    )
+
+                    self._report(safe_local_str, obs_key, size, "SUCCESS", "")
+
+                    return
+
+                raise Exception(f"OBS status {resp.status}")
+
+
+
+            except Exception as e:
+
+                retry += 1
+
+                self.progress.upload_errors += 1
+
+                last_err = repr(e)
+
+                logging.exception(
+
+                    f"[RETRY] {safe_local_str} retry={retry}"
+
+                )
+
+                time.sleep(min(2 ** retry + random.random(), 10))
+
+        # =========================
+        # 5️⃣ 失败
+        # =========================
+        logging.error(f"[UPLOAD_FAIL] {safe_local_str} err={last_err}")
+
+        self.record_failed(safe_local_str)
+
+        self._report(
+            safe_local_str,
+            obs_key,
+            size,
+            "FAILED",
+            last_err or "retry exceeded"
+        )
+
+    # ==========================================================
+    # 统一写报告（唯一出口）
+    # ==========================================================
+    def _report(self, local, obs, size, status, msg):
+
+        if not self.reporter:
+            return
+
+        try:
+            self.reporter.write(local, obs, size, status, msg)
+        except Exception as e:
+            logging.debug(f"[REPORT_FAIL] {obs} err={e}")
+    # ==========================================================
+    # 失败记录
+    # ==========================================================
+    def record_failed(self, path):
+
+        f = os.path.join(self.failed_dir, "failed.txt")
+
+        if os.path.exists(f) and os.path.getsize(f) > 50 * 1024 * 1024:
+            os.rename(f, f + ".1")
+
+        with self.lock:
+            with open(f, "a", encoding="utf-8") as fp:
+                fp.write(path + "\n")

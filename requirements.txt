@@ -1,0 +1,5 @@
+esdk-obs-python
+chardet
+rich
+cryptography
+colorama
