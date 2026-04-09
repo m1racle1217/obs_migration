@@ -1,5 +1,6 @@
 from obs import ObsClient
 import logging
+import threading
 
 def build_obs_index(ak, sk, endpoint, bucket, prefix):
     client = ObsClient(access_key_id=ak, secret_access_key=sk, server=endpoint)
@@ -29,7 +30,6 @@ def build_obs_index(ak, sk, endpoint, bucket, prefix):
 # ===============================
 # 新增文件 core/reporter.py
 # ===============================
-import threading
 
 class CSVReporter:
     def __init__(self, filepath):
