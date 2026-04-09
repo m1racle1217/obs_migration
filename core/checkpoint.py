@@ -9,6 +9,7 @@ import os
 class Checkpoint:
 
     def __init__(self, db_path, batch_size=500):
+        self.obs_index_ready = False
 
         dir_path = os.path.dirname(db_path)
 
@@ -59,7 +60,38 @@ class Checkpoint:
             "CREATE INDEX IF NOT EXISTS idx_path ON completed(path,size,mtime)"
         )
 
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS obs_objects (
+            key TEXT PRIMARY KEY,
+            size INTEGER,
+            etag TEXT
+            )
+            """
+        )
+
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_obs_key ON obs_objects(key);"
+        )
+
         self.conn.commit()
+    # ===============================
+    # 插入obs_list作为缓存index
+    # ===============================
+    def upsert_obs(self, key, size, etag=None):
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO obs_objects(key,size,etag) VALUES(?,?,?)",
+                (key, size, etag)
+            )
+
+    def get_obs(self, key):
+        cur = self.conn.execute(
+            "SELECT size, etag FROM obs_objects WHERE key=?",
+            (key,)
+        )
+        return cur.fetchone()
+
 
     # ===============================
     # 载入缓存

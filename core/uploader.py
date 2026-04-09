@@ -9,7 +9,7 @@ import random
 
 
 from obs import ObsClient
-from .utils import fix_windows_path, safe_log, sanitize_key,clean_path_to_utf8
+from .utils import fix_windows_path, safe_log, sanitize_key,clean_path_to_utf8,calc_file_md5
 
 _client = None
 _bucket = None
@@ -40,7 +40,7 @@ def init_uploader(ak, sk, endpoint, bucket, part_size, threshold, rate_limit=200
 
 class OBSUploader:
 
-    def __init__(self,progress,checkpoint,reporter=None,failed_dir="failed",enable_head_check=True,strict_client_check=True):
+    def __init__(self,progress,checkpoint,reporter=None,failed_dir="failed",enable_head_check=True,strict_client_check=True,enable_etag_check=False):
 
         self.progress = progress
         self.checkpoint = checkpoint
@@ -49,6 +49,7 @@ class OBSUploader:
 
         self.enable_head_check = enable_head_check
         self.strict_client_check = strict_client_check
+        self.enable_etag_check = enable_etag_check
 
         self.lock = threading.Lock()
         os.makedirs(failed_dir, exist_ok=True)
@@ -75,7 +76,7 @@ class OBSUploader:
         size = task.get("size", 0)
 
         # =========================
-        # 1️⃣ 文件 stat（必须用 bytes）
+        # 文件 stat（必须用 bytes）
         # =========================
         try:
             st = os.stat(local_path_bytes, follow_symlinks=False)
@@ -97,38 +98,108 @@ class OBSUploader:
             self.progress.skip()
             self.progress.add_done(size)
             return
+        # =========================
+        # INDEX 判断（超快）
+        # =========================
+        if getattr(self.checkpoint, "obs_index_ready", False):
+            self.progress.cache_total += 1
+            logging.warning(f"[DEBUG_KEY] query={obs_key}")
 
+            try:
+                row = self.checkpoint.get_obs(obs_key)
+            except Exception:
+                row = None
+
+            if row:
+                remote_size, remote_etag = row
+
+                if remote_size == size:
+
+                    self.progress.cache_hit_inc()
+                    self.progress.skip()
+                    self.progress.add_done(size)
+
+                    logging.info(
+                        f"[UPLOAD_SKIP][INDEX] {safe_local_str} -> {obs_key}"
+                    )
+
+                    self.checkpoint.mark_done(safe_local_str, size, mtime)
+
+                    self._report(
+                        safe_local_str,
+                        obs_key,
+                        size,
+                        "SKIP",
+                        "index(size)"
+                    )
+
+                    return
+
+                else:
+                    self.progress.cache_miss_inc()
+            else:
+                self.progress.cache_miss_inc()
         # =========================
-        # 2️⃣ HEAD 判断
+        # HEAD 判断
         # =========================
-        head_status = "UNKNOWN"  # NOT_EXIST / EXIST_SAME / EXIST_DIFF / ERROR
+        head_status = "UNKNOWN"
 
         if self.enable_head_check:
-            try:
-                meta = _client.getObjectMetadata(_bucket, obs_key)
 
-                if meta.status < 300:
-                    remote_size = meta.body.contentLength
+            need_head = True
+
+            if getattr(self.checkpoint, "obs_index_ready", False):
+                try:
+                    row = self.checkpoint.get_obs(obs_key)
+                except Exception:
+                    row = None
+
+                if row:
+                    remote_size, _ = row
 
                     if remote_size == size:
-                        head_status = "EXIST_SAME"
+                        need_head = False
+
+            if need_head:
+                try:
+                    meta = _client.getObjectMetadata(_bucket, obs_key)
+
+                    if meta.status < 300:
+                        remote_size = meta.body.contentLength
+                        remote_etag = meta.body.etag.strip('"')
+
+                        if remote_size == size:
+
+                            if self.enable_etag_check and size < 100 * 1024 * 1024:
+
+                                # ✅ 小文件才算 MD5
+                                local_str_for_upload = os.fsdecode(local_path_bytes)
+                                local_etag = calc_file_md5(local_str_for_upload)
+
+                                if local_etag == remote_etag:
+                                    head_status = "EXIST_SAME"
+                                else:
+                                    head_status = "EXIST_DIFF"
+
+                            else:
+                                head_status = "EXIST_SAME"
+
+                        else:
+                            head_status = "EXIST_DIFF"
+
+                    elif meta.status == 404:
+                        head_status = "NOT_EXIST"
+
                     else:
-                        head_status = "EXIST_DIFF"
+                        head_status = "ERROR"
 
-                elif meta.status == 404:
-                    head_status = "NOT_EXIST"
-                else:
+                except Exception as e:
+                    logging.debug(f"[HEAD_FAIL] {obs_key} err={e}")
                     head_status = "ERROR"
-
-            except Exception as e:
-                logging.debug(f"[HEAD_FAIL] {obs_key} err={e}")
-                head_status = "ERROR"
 
         # =========================
         # 3️⃣ 决策逻辑（核心）
         # =========================
-
-        # ✅ 远端已存在且一致 → 绝对跳过
         if head_status == "EXIST_SAME":
             self.progress.skip()
             self.progress.add_done(size)
