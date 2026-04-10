@@ -26,7 +26,7 @@ def build_obs_index(ak, sk, endpoint, bucket, prefix, checkpoint):
             raise Exception(f"OBS list error {resp.status}")
 
         for obj in resp.body.contents:
-            logging.warning(f"[INDEX_KEY] {obj.key}")
+            logging.debug(f"[INDEX_KEY] {obj.key}")
             checkpoint.upsert_obs(obj.key, obj.size, obj.etag)
             total += 1
 
@@ -36,9 +36,9 @@ def build_obs_index(ak, sk, endpoint, bucket, prefix, checkpoint):
         marker = resp.body.next_marker
 
     # ✅ 标记 index ready
-    checkpoint.obs_index_ready = True
+    checkpoint.set_index_ready()
 
-    logging.info(f"[OBS_INDEX] done total={total}")
+#    logging.info(f"[OBS_INDEX] done total={total}")
 
 
 # ===============================
@@ -60,7 +60,7 @@ class CSVReporter:
 
 
 # ===============================
-# 修改 scanner.py（关键改造）
+# 修改 scanner.py
 # ===============================
 
 

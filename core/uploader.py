@@ -92,7 +92,7 @@ class OBSUploader:
                 self._report(safe_local_str, obs_key, size, "ERROR", "encoding issue")
             else:
                 # ✅ 真正不存在
-                logging.warning(f"[REAL_MISSING] {safe_local_str}")
+                logging.debug(f"[REAL_MISSING] {safe_local_str}")
                 self._report(safe_local_str, obs_key, size, "MISSING", "file not found")
 
             self.progress.skip()
@@ -102,38 +102,47 @@ class OBSUploader:
         # INDEX 判断（超快）
         # =========================
         if getattr(self.checkpoint, "obs_index_ready", False):
-            self.progress.cache_total += 1
-            logging.warning(f"[DEBUG_KEY] query={obs_key}")
+            logging.debug(f"[DEBUG_KEY] query={obs_key}")
 
             try:
                 row = self.checkpoint.get_obs(obs_key)
             except Exception:
                 row = None
+            logging.debug(f"[INDEX_RESULT] key={obs_key} row={row}")
+            if row and row[0] == 0:
+                logging.debug(f"[DIRTY_INDEX] key={obs_key} row={row}")
+                dirty_index = True
+            else:
+                dirty_index = False
 
             if row:
                 remote_size, remote_etag = row
 
                 if remote_size == size:
 
+                    # ✅ 命中缓存
                     self.progress.cache_hit_inc()
-                    self.progress.skip()
-                    self.progress.add_done(size)
 
-                    logging.info(
-                        f"[UPLOAD_SKIP][INDEX] {safe_local_str} -> {obs_key}"
-                    )
+                    if not self.enable_etag_check:
+                        self.progress.skip()
+                        self.progress.add_done(size)
 
-                    self.checkpoint.mark_done(safe_local_str, size, mtime)
+                        self.checkpoint.mark_done(safe_local_str, size, mtime)
+                        logging.info(
+                            f"[SKIP][INDEX] {safe_local_str} -> {obs_key} size={size}"
+                        )
 
-                    self._report(
-                        safe_local_str,
-                        obs_key,
-                        size,
-                        "SKIP",
-                        "index(size)"
-                    )
+                        self._report(
+                            safe_local_str,
+                            obs_key,
+                            size,
+                            "SKIP",
+                            "index(size)"
+                        )
+                        return
 
-                    return
+                    # ✅ 开启 ETAG → 不跳过，继续走 HEAD
+                    logging.debug(f"[INDEX_HIT_BUT_VERIFY] {obs_key}")
 
                 else:
                     self.progress.cache_miss_inc()
@@ -144,7 +153,10 @@ class OBSUploader:
         # =========================
         head_status = "UNKNOWN"
 
-        if self.enable_head_check:
+        # 强制：没有index就必须HEAD
+        force_head = not getattr(self.checkpoint, "obs_index_ready", False)
+
+        if self.enable_head_check or force_head:
 
             need_head = True
 
@@ -158,7 +170,10 @@ class OBSUploader:
                     remote_size, _ = row
 
                     if remote_size == size:
-                        need_head = False
+                        if self.enable_etag_check:
+                            need_head = True  # 🔥 强制走 HEAD
+                        else:
+                            need_head = False
 
             if need_head:
                 try:
@@ -168,13 +183,15 @@ class OBSUploader:
                         remote_size = meta.body.contentLength
                         remote_etag = meta.body.etag.strip('"')
 
-                        if remote_size == size:
+                        if remote_size != size:
+                            head_status = "EXIST_DIFF"
 
+                        else:
                             if self.enable_etag_check and size < 100 * 1024 * 1024:
 
-                                # ✅ 小文件才算 MD5
-                                local_str_for_upload = os.fsdecode(local_path_bytes)
-                                local_etag = calc_file_md5(local_str_for_upload)
+                                logging.debug(f"[ETAG_CHECK] {obs_key}")
+
+                                local_etag = calc_file_md5(os.fsdecode(local_path_bytes))
 
                                 if local_etag == remote_etag:
                                     head_status = "EXIST_SAME"
@@ -183,9 +200,6 @@ class OBSUploader:
 
                             else:
                                 head_status = "EXIST_SAME"
-
-                        else:
-                            head_status = "EXIST_DIFF"
 
                     elif meta.status == 404:
                         head_status = "NOT_EXIST"
@@ -204,8 +218,13 @@ class OBSUploader:
             self.progress.skip()
             self.progress.add_done(size)
 
+            if self.enable_etag_check:
+                tag = "HEAD_ETAG"
+            else:
+                tag = "HEAD_SIZE"
+
             logging.info(
-                f"[UPLOAD_SKIP][OBS] {safe_local_str} -> {obs_key} size={size}"
+                f"[SKIP][{tag}] {safe_local_str} -> {obs_key} size={size}"
             )
 
             self.checkpoint.mark_done(safe_local_str, size, mtime)
@@ -214,11 +233,11 @@ class OBSUploader:
             return
 
         # ⚠️ HEAD失败 → 才允许用 checkpoint
-        if head_status == "ERROR" and self.enable_head_check:
+        if head_status == "ERROR":
 
             if self.checkpoint.is_done(safe_local_str, size, mtime):
-                logging.warning(
-                    f"[CHECKPOINT_SKIP][HEAD_UNKNOWN] {safe_local_str}"
+                logging.info(
+                    f"[SKIP][CHECKPOINT] {safe_local_str} -> {obs_key}"
                 )
 
                 self.progress.skip()
@@ -265,8 +284,7 @@ class OBSUploader:
                     self.progress.add_done(size)
 
                     logging.info(
-                        f"[UPLOAD_OK] {safe_local_str} -> {obs_key} "
-                        f"size={size} cost={cost:.2f}s"
+                        f"[UPLOAD][SUCCESS] {safe_local_str} -> {obs_key} size={size} cost={cost:.2f}s"
                     )
 
                     self._report(safe_local_str, obs_key, size, "SUCCESS", "")
