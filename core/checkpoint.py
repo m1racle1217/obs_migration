@@ -30,6 +30,8 @@ class Checkpoint:
 
         self._init_db()
 
+        self.load_index_flag()
+
         self._load_cache()
 
     # ===============================
@@ -74,7 +76,34 @@ class Checkpoint:
             "CREATE INDEX IF NOT EXISTS idx_obs_key ON obs_objects(key);"
         )
 
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS meta (
+            key TEXT PRIMARY KEY,
+            value TEXT
+            );
+            """
+        )
         self.conn.commit()
+
+    # ===============================
+    # index ready 标记（持久化）
+    # ===============================
+
+    def set_index_ready(self):
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO meta(key,value) VALUES('obs_index_ready','1')"
+            )
+        self.obs_index_ready = True  # ✅ 内存也同步
+
+    def load_index_flag(self):
+        cur = self.conn.execute(
+            "SELECT value FROM meta WHERE key='obs_index_ready'"
+        )
+        row = cur.fetchone()
+
+        self.obs_index_ready = (row and row[0] == '1')
     # ===============================
     # 插入obs_list作为缓存index
     # ===============================
