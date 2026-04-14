@@ -99,6 +99,8 @@ def scan_directory(
                 dir_queue.task_done()
                 return
 
+            progress.scan_worker_started()
+
             try:
 
                 with os.scandir(current_dir_bytes) as dir_iterator:
@@ -222,6 +224,7 @@ def scan_directory(
                 )
 
             finally:
+                progress.scan_worker_finished()
                 dir_queue.task_done()
 
     # 启动线程
