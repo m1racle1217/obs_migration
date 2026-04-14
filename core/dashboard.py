@@ -1,7 +1,6 @@
 # core/dashboard.py
 # -*- coding: utf-8 -*-
 
-import threading
 import time
 
 from rich.console import Console
@@ -19,6 +18,7 @@ class Dashboard:
         scan_workers,
         enabled=True,
         force_terminal=False,
+        status_provider=None,
     ):
 
         self.progress = progress
@@ -26,30 +26,17 @@ class Dashboard:
         self.scheduler = scheduler
         self.scan_workers = scan_workers
         self.enabled = enabled
-        self.force_terminal = force_terminal
         self.console = Console(force_terminal=force_terminal)
-
+        self.status_provider = status_provider
         self.running = False
-        self.thread = None
 
     def start(self):
 
-        if not self.enabled:
-            return
-
         self.running = True
-        self.thread = threading.Thread(
-            target=self._loop,
-            daemon=True,
-        )
-        self.thread.start()
 
     def stop(self):
 
         self.running = False
-
-        if self.thread:
-            self.thread.join()
 
     def build_table(self):
 
@@ -65,6 +52,23 @@ class Dashboard:
         upload_errors = snapshot["upload_errors"]
         cache_hit = snapshot["cache_hit"]
         cache_total = snapshot["cache_total"]
+        active_workers = self.scheduler.get_active_workers()
+
+        status = {}
+        if self.status_provider is not None:
+            status = self.status_provider()
+
+        index_status = status.get("index", "unknown")
+        scan_status = status.get("scan", "unknown")
+
+        if active_workers > 0:
+            upload_status = f"running ({active_workers} active)"
+        elif self.task_queue.unfinished_tasks > 0:
+            upload_status = "queued"
+        elif scan_status in {"pending", "running"}:
+            upload_status = "waiting for scan"
+        else:
+            upload_status = "idle"
 
         hit_rate = 0
         if cache_total > 0:
@@ -83,6 +87,9 @@ class Dashboard:
         table.add_row("Files Done", str(files_done))
         table.add_row("Upload Skip", str(files_skip))
         table.add_row("Scan Skip", str(scan_skip))
+        table.add_row("Index Status", index_status)
+        table.add_row("Scan Status", scan_status)
+        table.add_row("Upload Status", upload_status)
         table.add_row("Cache Hit", f"{cache_hit}/{cache_total}")
         table.add_row("Hit Rate", f"{hit_rate:.1f}%")
         table.add_row(
@@ -100,15 +107,34 @@ class Dashboard:
 
         return table
 
-    def _loop(self):
+    def run_until(self, done_fn, poll_interval=0.2, start_fn=None):
+
+        self.running = True
+
+        if not self.enabled:
+            if start_fn is not None:
+                start_fn()
+            while self.running and not done_fn():
+                time.sleep(poll_interval)
+            return
 
         with Live(
             self.build_table(),
-            refresh_per_second=2,
+            refresh_per_second=max(1, int(1 / poll_interval)),
             console=self.console,
             transient=False,
         ) as live:
+            live.update(self.build_table(), refresh=True)
+
+            if start_fn is not None:
+                start_fn()
 
             while self.running:
-                live.update(self.build_table())
-                time.sleep(1)
+                live.update(self.build_table(), refresh=True)
+
+                if done_fn():
+                    break
+
+                time.sleep(poll_interval)
+
+            live.update(self.build_table(), refresh=True)

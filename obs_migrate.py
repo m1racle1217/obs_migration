@@ -139,7 +139,17 @@ def should_force_terminal():
     if env_value is not None:
         return env_value
 
-    return os.getenv("PYCHARM_HOSTED") == "1"
+    if os.getenv("CI"):
+        return False
+
+    return os.name == "nt" or os.getenv("PYCHARM_HOSTED") == "1"
+
+
+def resolve_scan_workers(requested):
+
+    cpu_count = os.cpu_count() or 4
+    recommended = max(2, min(32, cpu_count * 2))
+    return max(1, min(requested, recommended))
 
 
 # ==========================================================
@@ -170,7 +180,7 @@ CONFIG_DESC = {
     "PATH.state_dir": "断点数据库目录",
     "PATH.failed_dir": "失败任务目录",
 
-    "enable_etag_check": "是否启用 ETAG 校验（最准确但最慢）",
+    "CHECK.enable_etag_check": "是否启用 ETAG 校验（最准确但最慢）",
     "CHECK.enable_head_check": "是否启用 HEAD 校验（更准确但更慢）",
     "CHECK.strict_client_check": "client 未初始化是否报错（true=严格模式）",
 
@@ -566,7 +576,8 @@ def main():
 
     failed_dir = cfg.get("PATH", "failed_dir")
 
-    scan_workers = cfg.getint("SCAN", "scan_workers", fallback=4)
+    requested_scan_workers = cfg.getint("SCAN", "scan_workers", fallback=4)
+    scan_workers = resolve_scan_workers(requested_scan_workers)
 
     enable_head = cfg.getboolean("CHECK", "enable_head_check", fallback=True)
 
@@ -583,6 +594,16 @@ def main():
     setup_logger(log_file)
 
     logging.getLogger().propagate = False
+
+    if scan_workers != requested_scan_workers:
+        print(
+            f"\n⚠️ 扫描线程配置过高，已从 {requested_scan_workers} 自动调整为 {scan_workers}\n"
+        )
+        logging.warning(
+            "[SCAN] requested workers=%s is too high for local scanning, using %s",
+            requested_scan_workers,
+            scan_workers,
+        )
 
     db_path = os.path.join(state_dir, "tasks.db")
 
@@ -621,7 +642,7 @@ def main():
         failed_dir=failed_dir,
         enable_head_check=enable_head,
         strict_client_check=strict_check,
-        enable_etag_check=enable_etag,  # ✅ 新增
+        enable_etag_check=enable_etag,
         retry_limit=retry_limit,
     )
 
@@ -631,6 +652,20 @@ def main():
         workers=workers
     )
 
+    pipeline_status = {
+        "index": "pending",
+        "scan": "pending" if not os.path.isfile(local_dir) else "n/a",
+    }
+    pipeline_status_lock = threading.Lock()
+
+    def set_status(name, value):
+        with pipeline_status_lock:
+            pipeline_status[name] = value
+
+    def get_status():
+        with pipeline_status_lock:
+            return dict(pipeline_status)
+
     dashboard = Dashboard(
         progress,
         task_queue,
@@ -638,88 +673,116 @@ def main():
         scan_workers=scan_workers,
         enabled=should_enable_dashboard(cfg),
         force_terminal=should_force_terminal(),
+        status_provider=get_status,
     )
-    index_thread = threading.Thread(
-        target=build_obs_index,
-        args=(
-            ak,
-            sk,
-            cfg.get("OBS", "endpoint"),
-            bucket,
-            obs_prefix,
-            checkpoint
-        ),
-        daemon=True
-    )
+
+    def run_index():
+        set_status("index", "running")
+        try:
+            build_obs_index(
+                ak,
+                sk,
+                cfg.get("OBS", "endpoint"),
+                bucket,
+                obs_prefix,
+                checkpoint,
+            )
+        except Exception:
+            set_status("index", "error")
+            raise
+        else:
+            set_status("index", "done")
+
+    index_thread = threading.Thread(target=run_index, daemon=True)
 
     scan_thread = None
+    scan_done_event = threading.Event()
 
-    progress.start()
-    scheduler.start()
-    dashboard.start()
-    index_thread.start()
+    def start_work():
 
-    if os.path.isfile(local_dir):
+        nonlocal scan_thread
 
-        st = os.stat(local_dir)
+        progress.start()
+        scheduler.start()
+        index_thread.start()
 
-        filename = os.path.basename(local_dir)
+        if os.path.isfile(local_dir):
 
-        obs_key = "/".join(
-            filter(None, [obs_prefix.strip("/"), filename])
-        )
+            st = os.stat(local_dir)
 
-        task = {
-            "local": local_dir,
-            "obs": obs_key,
-            "size": st.st_size
-        }
+            filename = os.path.basename(local_dir)
 
-        progress.add_total(st.st_size)
+            obs_key = "/".join(
+                filter(None, [obs_prefix.strip("/"), filename])
+            )
 
-        task_queue.put(task)
+            task = {
+                "local": local_dir,
+                "obs": obs_key,
+                "size": st.st_size
+            }
 
-    else:
+            progress.add_total(st.st_size)
+            scan_done_event.set()
+            task_queue.put(task)
 
-        scan_thread = threading.Thread(
-            target=scan_directory,
-            args=(
-                local_dir,
-                obs_prefix,
-                task_queue,
-                progress,
-                checkpoint,
-                reporter,
-                scan_workers
-            ),
-            daemon=True
-        )
+        else:
 
-        scan_thread.start()
+            def run_scan():
+                set_status("scan", "running")
+                try:
+                    scan_directory(
+                        local_dir,
+                        obs_prefix,
+                        task_queue,
+                        progress,
+                        checkpoint,
+                        reporter,
+                        scan_workers,
+                        scan_done_event,
+                    )
+                except Exception:
+                    set_status("scan", "error")
+                    scan_done_event.set()
+                    raise
+                else:
+                    set_status("scan", "done")
+
+            scan_thread = threading.Thread(
+                target=run_scan,
+                daemon=True
+            )
+
+            scan_thread.start()
 
     try:
 
         logging.info(f"Task Started. Log: {log_file}")
 
-        while True:
+        def work_finished():
 
             if os.path.isfile(local_dir):
+                return task_queue.unfinished_tasks == 0
 
-                if task_queue.empty():
-                    break
+            return (
+                scan_done_event.is_set() and
+                task_queue.unfinished_tasks == 0
+            )
 
-            else:
-
-                if not scan_thread.is_alive() and task_queue.empty():
-                    break
-
-            time.sleep(1)
+        dashboard.run_until(
+            work_finished,
+            poll_interval=0.2,
+            start_fn=start_work,
+        )
 
     except KeyboardInterrupt:
 
         logging.warning("用户手动停止任务")
 
     finally:
+
+        if scan_thread is not None:
+            scan_thread.join(timeout=5)
 
         scheduler.stop()
         progress.stop()
