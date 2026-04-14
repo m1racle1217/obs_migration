@@ -7,12 +7,10 @@ import queue
 import logging
 import threading
 import configparser
-import getpass
 import time
 from datetime import datetime
 from cryptography.fernet import Fernet
 from core.obs_index import build_obs_index
-import csv
 
 from core import (
     scan_directory,
@@ -26,7 +24,6 @@ from core import (
 )
 
 from core.utils import parse_size, setup_logger
-import core.uploader as uploader
 from colorama import Fore, Style, init
 
 init(autoreset=True)
@@ -92,6 +89,59 @@ def ensure_dirs():
         os.makedirs(d, exist_ok=True)
 
 
+def parse_env_bool(name):
+
+    value = os.getenv(name)
+    if value is None:
+        return None
+
+    value = value.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def should_prompt_config(cfg=None):
+
+    env_value = parse_env_bool("OBS_MIGRATE_INTERACTIVE")
+    if env_value is not None:
+        return env_value
+
+    if os.getenv("CI"):
+        return False
+
+    if cfg is not None:
+        return cfg.getboolean("UI", "prompt_config", fallback=True)
+
+    return True
+
+
+def should_enable_dashboard(cfg=None):
+
+    env_value = parse_env_bool("OBS_MIGRATE_DASHBOARD")
+    if env_value is not None:
+        return env_value
+
+    if os.getenv("CI"):
+        return False
+
+    if cfg is not None:
+        return cfg.getboolean("UI", "show_dashboard", fallback=True)
+
+    return True
+
+
+def should_force_terminal():
+
+    env_value = parse_env_bool("OBS_MIGRATE_FORCE_TERMINAL")
+    if env_value is not None:
+        return env_value
+
+    return os.getenv("PYCHARM_HOSTED") == "1"
+
+
 # ==========================================================
 # 参数说明
 # ==========================================================
@@ -120,8 +170,12 @@ CONFIG_DESC = {
     "PATH.state_dir": "断点数据库目录",
     "PATH.failed_dir": "失败任务目录",
 
+    "enable_etag_check": "是否启用 ETAG 校验（最准确但最慢）",
     "CHECK.enable_head_check": "是否启用 HEAD 校验（更准确但更慢）",
-    "CHECK.strict_client_check": "client 未初始化是否报错（true=严格模式）"
+    "CHECK.strict_client_check": "client 未初始化是否报错（true=严格模式）",
+
+    "UI.prompt_config": "启动时是否允许交互修改配置",
+    "UI.show_dashboard": "是否显示实时仪表盘",
 
 
 }
@@ -168,6 +222,11 @@ DEFAULT_CONFIG = {
         "log_dir": "./logs",
         "state_dir": "./state",
         "failed_dir": "./failed"
+    },
+    "UI": {
+
+        "prompt_config": "true",
+        "show_dashboard": "true"
     },
     "CHECK": {
 
@@ -227,8 +286,6 @@ def init_config():
 # ==========================================================
 # 显示配置
 # ==========================================================
-
-from colorama import Fore, Style
 
 def show_config(cfg):
 
@@ -339,17 +396,17 @@ def load_config():
 
     # 写回
     if updated:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            cfg.write(f)
+        write_config_with_comments(cfg)
 
         print("\n⚙️ 检测到新配置项，已自动更新 config.ini\n")
 
-    show_config(cfg)
+    if should_prompt_config(cfg):
+        show_config(cfg)
 
-    c = input("\n是否修改配置? (y/N): ")
+        c = input("\n是否修改配置? (y/N): ")
 
-    if c.lower() == "y":
-        modify_config(cfg)
+        if c.lower() == "y":
+            modify_config(cfg)
 
     return cfg
 
@@ -400,6 +457,37 @@ def validate_config(cfg):
     if not os.path.exists(local_dir):
         print("❌ local_dir 不存在")
         sys.exit(1)
+
+    numeric_fields = [
+        ("UPLOAD", "workers"),
+        ("UPLOAD", "retry"),
+        ("UPLOAD", "rate_limit"),
+        ("SCAN", "scan_workers"),
+        ("SCAN", "queue_size"),
+        ("SCAN", "batch_size"),
+    ]
+
+    for section, key in numeric_fields:
+        value = cfg.getint(section, key, fallback=0)
+        if value <= 0:
+            print(f"❌ {section}.{key} 必须大于 0")
+            sys.exit(1)
+
+    size_fields = [
+        ("UPLOAD", "part_size"),
+        ("UPLOAD", "multipart_threshold"),
+    ]
+
+    for section, key in size_fields:
+        try:
+            value = parse_size(cfg.get(section, key))
+        except Exception:
+            print(f"❌ {section}.{key} 不是合法大小")
+            sys.exit(1)
+
+        if value <= 0:
+            print(f"❌ {section}.{key} 必须大于 0")
+            sys.exit(1)
 
 
 # ==========================================================
@@ -470,6 +558,7 @@ def main():
     obs_prefix = cfg.get("TASK", "obs_prefix")
 
     workers = cfg.getint("UPLOAD", "workers")
+    retry_limit = cfg.getint("UPLOAD", "retry")
 
     log_dir = cfg.get("PATH", "log_dir")
 
@@ -498,6 +587,7 @@ def main():
     db_path = os.path.join(state_dir, "tasks.db")
 
     checkpoint = Checkpoint(db_path)
+    checkpoint.reset_obs_index()
 
     progress = Progress()
 
@@ -531,7 +621,8 @@ def main():
         failed_dir=failed_dir,
         enable_head_check=enable_head,
         strict_client_check=strict_check,
-        enable_etag_check=enable_etag  # ✅ 新增
+        enable_etag_check=enable_etag,  # ✅ 新增
+        retry_limit=retry_limit,
     )
 
     scheduler = Scheduler(
@@ -544,7 +635,9 @@ def main():
         progress,
         task_queue,
         scheduler,
-        scan_workers=scan_workers
+        scan_workers=scan_workers,
+        enabled=should_enable_dashboard(cfg),
+        force_terminal=should_force_terminal(),
     )
     index_thread = threading.Thread(
         target=build_obs_index,
@@ -558,6 +651,8 @@ def main():
         ),
         daemon=True
     )
+
+    scan_thread = None
 
     progress.start()
     scheduler.start()
