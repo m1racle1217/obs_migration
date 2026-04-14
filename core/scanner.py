@@ -48,7 +48,8 @@ def scan_directory(
         progress,
         checkpoint,
         reporter=None,
-        scan_workers = 4
+        scan_workers = 4,
+        scan_done_event=None,
 ):
 
     root_dir_bytes = os.fsencode(root_dir)
@@ -234,6 +235,9 @@ def scan_directory(
         threads.append(t)
 
     dir_queue.join()
+
+    if scan_done_event is not None:
+        scan_done_event.set()
 
     for _ in range(scan_workers):
         dir_queue.put(stop_token)

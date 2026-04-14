@@ -15,6 +15,8 @@ class Scheduler:
         self.workers = workers
 
         self.threads = []
+        self.lock = threading.Lock()
+        self.active_workers = 0
 
         self.running = True
 
@@ -58,6 +60,8 @@ class Scheduler:
                 continue
 
             try:
+                with self.lock:
+                    self.active_workers += 1
 
                 self.uploader.upload(task)
 
@@ -66,6 +70,8 @@ class Scheduler:
                 logging.error(f"worker error {e}")
 
             finally:
+                with self.lock:
+                    self.active_workers -= 1
 
                 self.task_queue.task_done()
 
@@ -80,3 +86,8 @@ class Scheduler:
         for t in self.threads:
 
             t.join()
+
+    def get_active_workers(self):
+
+        with self.lock:
+            return self.active_workers
