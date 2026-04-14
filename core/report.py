@@ -195,5 +195,5 @@ class Reporter:
 
         self._write_summary()
 
-        print(f"[REPORT] saved: {self.file}")
+        print(f"\n[REPORT] saved: {self.file}")
         print(f"[SUMMARY] saved: {self.summary_file}")
