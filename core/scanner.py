@@ -8,12 +8,6 @@ Directory Scanner Module（生产级修正版 + 可审计增强）
 ✔ 原扫描逻辑完全不变
 ✔ bytes 路径不破坏
 ✔ 编码安全
-
-修复：
-❌ 不再写 reporter（避免假数据）
-❌ 不再依赖 obs_index（避免内存爆炸）
-
-增强：
 ✔ 传递 size 给 uploader（用于 HEAD 判断）
 ✔ 更干净职责：只负责“发现任务”
 ✔ ✅ 新增：扫描阶段忽略原因上报（可选）
@@ -73,8 +67,9 @@ def scan_directory(
     scanned_lock = threading.Lock()
 
     # ==========================================================
-    # ✅ 新增：统一 skip 上报（仅扫描阶段）
+    # ✅ 查询 OBS 索引,统一 skip 上报（仅扫描阶段）
     # ==========================================================
+
     def report_skip(path_bytes, reason):
         progress.scan_skip_inc()
         if not reporter:
@@ -176,15 +171,8 @@ def scan_directory(
                             # -------------------------
                             # 获取文件信息（新增）
                             # -------------------------
-                            try:
-                                st = entry.stat()
-                                size = st.st_size
-                            except Exception as e:
-                                with scanned_lock:
-                                    progress.scan_errors += 1
-
-                                report_skip(entry.path, f"stat_error({str(e)[:30]})")
-                                continue
+                            st = entry.stat()
+                            size = st.st_size
 
                             # -------------------------
                             # 创建任务（增强：带 size）

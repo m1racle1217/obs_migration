@@ -40,6 +40,8 @@ class Progress:
         self.running = False
 
         self._thread = None
+        self.cache_hit = 0
+        self.cache_total = 0
 
     # =============================
     # 启动进度系统
@@ -99,6 +101,15 @@ class Progress:
     def scan_skip_inc(self, n=1):
         with self.lock:
             self.scan_skip += n
+
+    def cache_hit_inc(self):
+        with self.lock:
+            self.cache_hit += 1
+            self.cache_total += 1
+
+    def cache_miss_inc(self):
+        with self.lock:
+            self.cache_total += 1
 
     # =============================
     # UI 渲染

@@ -11,6 +11,7 @@ import getpass
 import time
 from datetime import datetime
 from cryptography.fernet import Fernet
+from core.obs_index import build_obs_index
 import csv
 
 from core import (
@@ -171,7 +172,8 @@ DEFAULT_CONFIG = {
     "CHECK": {
 
     "enable_head_check": "true",
-    "strict_client_check": "true"
+    "strict_client_check": "true",
+    "enable_etag_check" : "false"
     }
 }
 
@@ -426,59 +428,6 @@ def build_log_file(log_dir, local_dir):
 
         i += 1
 
-
-# ================= 新增：OBS 索引 =================
-
-def build_obs_index(bucket,obs_prefix):
-
-    logging.info("[OBS] 正在拉取远端对象列表...")
-
-    index = {}
-
-    client = uploader._client
-
-    if client is None:
-        logging.warning("[OBS] client 未初始化，跳过对比")
-        return None
-
-    prefix = obs_prefix.strip("/")
-    if prefix:
-        prefix += "/"
-
-    try:
-
-        marker = None
-
-        while True:
-
-            resp = client.listObjects(
-                bucketName=bucket,
-                prefix=prefix,
-                max_keys=1000,
-                marker=marker
-            )
-
-            for obj in resp.body.contents:
-                index[obj.key] = obj.size
-
-            if len(index) > 5_000_000:
-                logging.warning("[OBS] 对象过多，停止构建 index")
-                return None
-
-            if not resp.body.is_truncated:
-                break
-
-            marker = resp.body.next_marker
-
-    except Exception as e:
-
-        logging.warning(f"[OBS] 拉取失败，跳过对比: {e}")
-        return None
-
-    logging.info(f"[OBS] 已加载 {len(index)} 对象")
-
-    return index
-
 # ==========================================================
 # 主程序
 # ==========================================================
@@ -534,6 +483,8 @@ def main():
 
     strict_check = cfg.getboolean("CHECK", "strict_client_check", fallback=True)
 
+    enable_etag = cfg.getboolean("CHECK", "enable_etag_check", fallback=False)
+
     # ================= 新增目录 =================
     report_dir = os.path.join(os.getcwd(), "check_report")
     os.makedirs(report_dir, exist_ok=True)
@@ -571,7 +522,6 @@ def main():
 
     bucket = cfg.get("OBS", "bucket")
 
-    obs_index = build_obs_index(bucket, obs_prefix)
 
     # ================= 原逻辑 =================
     uploader = OBSUploader(
@@ -580,7 +530,8 @@ def main():
         reporter=reporter,
         failed_dir=failed_dir,
         enable_head_check=enable_head,
-        strict_client_check=strict_check
+        strict_client_check=strict_check,
+        enable_etag_check=enable_etag  # ✅ 新增
     )
 
     scheduler = Scheduler(
@@ -595,10 +546,23 @@ def main():
         scheduler,
         scan_workers=scan_workers
     )
+    index_thread = threading.Thread(
+        target=build_obs_index,
+        args=(
+            ak,
+            sk,
+            cfg.get("OBS", "endpoint"),
+            bucket,
+            obs_prefix,
+            checkpoint
+        ),
+        daemon=True
+    )
 
     progress.start()
     scheduler.start()
     dashboard.start()
+    index_thread.start()
 
     if os.path.isfile(local_dir):
 

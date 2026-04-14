@@ -54,13 +54,23 @@ class Dashboard:
         table.add_column("Value")
 
         with p.lock:
-
             done = p.done_bytes
             total = p.total_bytes
 
             files_done = p.files_done
             files_skip = p.files_skip
             scan_skip = p.scan_skip
+
+            cache_hit = p.cache_hit
+            cache_total = p.cache_total
+
+            hit_rate = 0
+            if cache_total > 0:
+                hit_rate = cache_hit / cache_total * 100
+
+            scan_elapsed = max(time.time() - p.scan_start, 0.001)
+            scan_speed = p.scan_files / scan_elapsed
+
 
         elapsed = time.time() - p.start_time
 
@@ -73,7 +83,8 @@ class Dashboard:
         table.add_row("Upload Skip", str(files_skip))
         table.add_row("Scan Skip", str(scan_skip))
 
-
+        table.add_row("Cache Hit", f"{cache_hit}/{cache_total}")
+        table.add_row("Hit Rate", f"{hit_rate:.1f}%")
         table.add_row(
             "Progress",
             f"{done/1024/1024:.1f}MB / {total/1024/1024:.1f}MB"
@@ -82,7 +93,7 @@ class Dashboard:
 
         table.add_row(
             "Scan Speed",
-            f"{p.scan_files / (time.time() - p.scan_start):.0f} files/s"
+            f"{scan_speed:.0f} files/s"
         )
 
         table.add_row("Scan Errors", str(p.scan_errors))

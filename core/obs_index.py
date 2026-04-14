@@ -2,29 +2,43 @@ from obs import ObsClient
 import logging
 import threading
 
-def build_obs_index(ak, sk, endpoint, bucket, prefix):
-    client = ObsClient(access_key_id=ak, secret_access_key=sk, server=endpoint)
+def build_obs_index(ak, sk, endpoint, bucket, prefix, checkpoint):
+    client = ObsClient(
+        access_key_id=ak,
+        secret_access_key=sk,
+        server=endpoint
+    )
+
     marker = None
-    index = {}
+    total = 0
 
     logging.info(f"[OBS_INDEX] start build index prefix={prefix}")
 
     while True:
-        resp = client.listObjects(bucket, prefix=prefix, marker=marker, max_keys=1000)
+        resp = client.listObjects(
+            bucket,
+            prefix=prefix,
+            marker=marker,
+            max_keys=1000
+        )
 
         if resp.status >= 300:
             raise Exception(f"OBS list error {resp.status}")
 
         for obj in resp.body.contents:
-            index[obj.key] = obj.size
+            logging.debug(f"[INDEX_KEY] {obj.key}")
+            checkpoint.upsert_obs(obj.key, obj.size, obj.etag)
+            total += 1
 
         if not resp.body.is_truncated:
             break
 
         marker = resp.body.next_marker
 
-    logging.info(f"[OBS_INDEX] done total={len(index)}")
-    return index
+    # ✅ 标记 index ready
+    checkpoint.set_index_ready()
+
+#    logging.info(f"[OBS_INDEX] done total={total}")
 
 
 # ===============================
@@ -46,11 +60,9 @@ class CSVReporter:
 
 
 # ===============================
-# 修改 scanner.py（关键改造）
+# 修改 scanner.py
 # ===============================
-# 修改函数签名
-# def scan_directory(..., checkpoint)
-# 改为：
+
 
 def scan_directory(
         root_dir,
@@ -58,7 +70,6 @@ def scan_directory(
         task_queue,
         progress,
         checkpoint,
-        obs_index=None,
         reporter=None
 ):
 
@@ -104,12 +115,6 @@ def scan_directory(
                         if reporter:
                             reporter.write(local_str, obs_key)
 
-                        # OBS 对比
-                        if obs_index:
-                            if obs_index.get(obs_key) == size:
-                                progress.skip()
-                                logging.info(f"[SKIP][OBS] {obs_key}")
-                                continue
 
                         task_queue.put({
                             "local": local_bytes,
