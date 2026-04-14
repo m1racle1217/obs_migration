@@ -18,6 +18,7 @@ class Progress:
         self.scan_errors = 0
         self.upload_errors = 0
         self.scan_skip = 0
+        self.scan_active_workers = 0
 
         self.scan_start = time.time()
         self.start_time = time.time()
@@ -62,6 +63,17 @@ class Progress:
         with self.lock:
             self.scan_errors += n
 
+    def scan_worker_started(self):
+
+        with self.lock:
+            self.scan_active_workers += 1
+
+    def scan_worker_finished(self):
+
+        with self.lock:
+            if self.scan_active_workers > 0:
+                self.scan_active_workers -= 1
+
     def upload_error_inc(self, n=1):
 
         with self.lock:
@@ -96,6 +108,7 @@ class Progress:
                 "scan_errors": self.scan_errors,
                 "upload_errors": self.upload_errors,
                 "scan_skip": self.scan_skip,
+                "scan_active_workers": self.scan_active_workers,
                 "scan_start": self.scan_start,
                 "start_time": self.start_time,
                 "cache_hit": self.cache_hit,
