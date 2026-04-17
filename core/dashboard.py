@@ -6,6 +6,7 @@ import time
 from rich.console import Console
 from rich.live import Live
 from rich.table import Table
+import sys
 
 
 class Dashboard:
@@ -26,7 +27,10 @@ class Dashboard:
         self.scheduler = scheduler
         self.scan_workers = scan_workers
         self.enabled = enabled
-        self.console = Console(force_terminal=force_terminal)
+        self.console = Console(
+            force_terminal=True,
+            file=sys.stdout,
+        )
         self.status_provider = status_provider
         self.running = False
 
@@ -132,9 +136,9 @@ class Dashboard:
             while self.running:
                 live.update(self.build_table(), refresh=True)
 
+                sys.stdout.flush()
+
                 if done_fn():
                     break
 
                 time.sleep(poll_interval)
-
-            live.update(self.build_table(), refresh=True)
