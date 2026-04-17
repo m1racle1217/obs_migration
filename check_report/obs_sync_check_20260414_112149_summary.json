@@ -1,0 +1,13 @@
+{
+    "SUCCESS": 7,
+    "UPLOAD_SKIP": 3469,
+    "SCAN_SKIP": 3,
+    "FAILED": 0,
+    "UNKNOWN": 0,
+    "SUCCESS_TOTAL": 3476,
+    "TOTAL_SIZE": 82647803,
+    "START_TIME": "2026-04-14 11:21:49",
+    "END_TIME": "2026-04-14 11:21:54",
+    "TOTAL_FILES": 3479,
+    "EFFECTIVE_FILES": 3476
+}
