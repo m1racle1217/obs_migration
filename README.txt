@@ -201,6 +201,8 @@ Linux / macOS（推荐）
 Windows（支持）
 安装依赖：
 pip install -r requirements.txt
+main目录下：
+pip install --no-index --find-links=./lib -r requirements.txt
 
 ⚙️ 配置说明（config.ini）
 [OBS]
