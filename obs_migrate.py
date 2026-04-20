@@ -7,12 +7,10 @@ import queue
 import logging
 import threading
 import configparser
-import getpass
 import time
 from datetime import datetime
 from cryptography.fernet import Fernet
 from core.obs_index import build_obs_index
-import csv
 
 from core import (
     scan_directory,
@@ -26,7 +24,6 @@ from core import (
 )
 
 from core.utils import parse_size, setup_logger
-import core.uploader as uploader
 from colorama import Fore, Style, init
 
 init(autoreset=True)
@@ -92,6 +89,69 @@ def ensure_dirs():
         os.makedirs(d, exist_ok=True)
 
 
+def parse_env_bool(name):
+
+    value = os.getenv(name)
+    if value is None:
+        return None
+
+    value = value.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def should_prompt_config(cfg=None):
+
+    env_value = parse_env_bool("OBS_MIGRATE_INTERACTIVE")
+    if env_value is not None:
+        return env_value
+
+    if os.getenv("CI"):
+        return False
+
+    if cfg is not None:
+        return cfg.getboolean("UI", "prompt_config", fallback=True)
+
+    return True
+
+
+def should_enable_dashboard(cfg=None):
+
+    env_value = parse_env_bool("OBS_MIGRATE_DASHBOARD")
+    if env_value is not None:
+        return env_value
+
+    if os.getenv("CI"):
+        return False
+
+    if cfg is not None:
+        return cfg.getboolean("UI", "show_dashboard", fallback=True)
+
+    return True
+
+
+def should_force_terminal():
+
+    env_value = parse_env_bool("OBS_MIGRATE_FORCE_TERMINAL")
+    if env_value is not None:
+        return env_value
+
+    if os.getenv("CI"):
+        return False
+
+    return os.name == "nt" or os.getenv("PYCHARM_HOSTED") == "1"
+
+
+def resolve_scan_workers(requested):
+
+    cpu_count = os.cpu_count() or 4
+    recommended = max(2, min(32, cpu_count * 2))
+    return max(1, min(requested, recommended))
+
+
 # ==========================================================
 # 参数说明
 # ==========================================================
@@ -120,8 +180,12 @@ CONFIG_DESC = {
     "PATH.state_dir": "断点数据库目录",
     "PATH.failed_dir": "失败任务目录",
 
+    "CHECK.enable_etag_check": "是否启用 ETAG 校验（最准确但最慢）",
     "CHECK.enable_head_check": "是否启用 HEAD 校验（更准确但更慢）",
-    "CHECK.strict_client_check": "client 未初始化是否报错（true=严格模式）"
+    "CHECK.strict_client_check": "client 未初始化是否报错（true=严格模式）",
+
+    "UI.prompt_config": "启动时是否允许交互修改配置",
+    "UI.show_dashboard": "是否显示实时仪表盘",
 
 
 }
@@ -168,6 +232,11 @@ DEFAULT_CONFIG = {
         "log_dir": "./logs",
         "state_dir": "./state",
         "failed_dir": "./failed"
+    },
+    "UI": {
+
+        "prompt_config": "true",
+        "show_dashboard": "true"
     },
     "CHECK": {
 
@@ -227,8 +296,6 @@ def init_config():
 # ==========================================================
 # 显示配置
 # ==========================================================
-
-from colorama import Fore, Style
 
 def show_config(cfg):
 
@@ -339,17 +406,17 @@ def load_config():
 
     # 写回
     if updated:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            cfg.write(f)
+        write_config_with_comments(cfg)
 
         print("\n⚙️ 检测到新配置项，已自动更新 config.ini\n")
 
-    show_config(cfg)
+    if should_prompt_config(cfg):
+        show_config(cfg)
 
-    c = input("\n是否修改配置? (y/N): ")
+        c = input("\n是否修改配置? (y/N): ")
 
-    if c.lower() == "y":
-        modify_config(cfg)
+        if c.lower() == "y":
+            modify_config(cfg)
 
     return cfg
 
@@ -400,6 +467,37 @@ def validate_config(cfg):
     if not os.path.exists(local_dir):
         print("❌ local_dir 不存在")
         sys.exit(1)
+
+    numeric_fields = [
+        ("UPLOAD", "workers"),
+        ("UPLOAD", "retry"),
+        ("UPLOAD", "rate_limit"),
+        ("SCAN", "scan_workers"),
+        ("SCAN", "queue_size"),
+        ("SCAN", "batch_size"),
+    ]
+
+    for section, key in numeric_fields:
+        value = cfg.getint(section, key, fallback=0)
+        if value <= 0:
+            print(f"❌ {section}.{key} 必须大于 0")
+            sys.exit(1)
+
+    size_fields = [
+        ("UPLOAD", "part_size"),
+        ("UPLOAD", "multipart_threshold"),
+    ]
+
+    for section, key in size_fields:
+        try:
+            value = parse_size(cfg.get(section, key))
+        except Exception:
+            print(f"❌ {section}.{key} 不是合法大小")
+            sys.exit(1)
+
+        if value <= 0:
+            print(f"❌ {section}.{key} 必须大于 0")
+            sys.exit(1)
 
 
 # ==========================================================
@@ -470,6 +568,7 @@ def main():
     obs_prefix = cfg.get("TASK", "obs_prefix")
 
     workers = cfg.getint("UPLOAD", "workers")
+    retry_limit = cfg.getint("UPLOAD", "retry")
 
     log_dir = cfg.get("PATH", "log_dir")
 
@@ -477,7 +576,8 @@ def main():
 
     failed_dir = cfg.get("PATH", "failed_dir")
 
-    scan_workers = cfg.getint("SCAN", "scan_workers", fallback=4)
+    requested_scan_workers = cfg.getint("SCAN", "scan_workers", fallback=4)
+    scan_workers = resolve_scan_workers(requested_scan_workers)
 
     enable_head = cfg.getboolean("CHECK", "enable_head_check", fallback=True)
 
@@ -495,9 +595,20 @@ def main():
 
     logging.getLogger().propagate = False
 
+    if scan_workers != requested_scan_workers:
+        print(
+            f"\n⚠️ 扫描线程配置过高，已从 {requested_scan_workers} 自动调整为 {scan_workers}\n"
+        )
+        logging.warning(
+            "[SCAN] requested workers=%s is too high for local scanning, using %s",
+            requested_scan_workers,
+            scan_workers,
+        )
+
     db_path = os.path.join(state_dir, "tasks.db")
 
     checkpoint = Checkpoint(db_path)
+    checkpoint.reset_obs_index()
 
     progress = Progress()
 
@@ -531,7 +642,8 @@ def main():
         failed_dir=failed_dir,
         enable_head_check=enable_head,
         strict_client_check=strict_check,
-        enable_etag_check=enable_etag  # ✅ 新增
+        enable_etag_check=enable_etag,
+        retry_limit=retry_limit,
     )
 
     scheduler = Scheduler(
@@ -540,91 +652,137 @@ def main():
         workers=workers
     )
 
+    pipeline_status = {
+        "index": "pending",
+        "scan": "pending" if not os.path.isfile(local_dir) else "n/a",
+    }
+    pipeline_status_lock = threading.Lock()
+
+    def set_status(name, value):
+        with pipeline_status_lock:
+            pipeline_status[name] = value
+
+    def get_status():
+        with pipeline_status_lock:
+            return dict(pipeline_status)
+
     dashboard = Dashboard(
         progress,
         task_queue,
         scheduler,
-        scan_workers=scan_workers
-    )
-    index_thread = threading.Thread(
-        target=build_obs_index,
-        args=(
-            ak,
-            sk,
-            cfg.get("OBS", "endpoint"),
-            bucket,
-            obs_prefix,
-            checkpoint
-        ),
-        daemon=True
+        scan_workers=scan_workers,
+        enabled=should_enable_dashboard(cfg),
+        force_terminal=should_force_terminal(),
+        status_provider=get_status,
     )
 
-    progress.start()
-    scheduler.start()
-    dashboard.start()
-    index_thread.start()
-
-    if os.path.isfile(local_dir):
-
-        st = os.stat(local_dir)
-
-        filename = os.path.basename(local_dir)
-
-        obs_key = "/".join(
-            filter(None, [obs_prefix.strip("/"), filename])
-        )
-
-        task = {
-            "local": local_dir,
-            "obs": obs_key,
-            "size": st.st_size
-        }
-
-        progress.add_total(st.st_size)
-
-        task_queue.put(task)
-
-    else:
-
-        scan_thread = threading.Thread(
-            target=scan_directory,
-            args=(
-                local_dir,
+    def run_index():
+        set_status("index", "running")
+        try:
+            build_obs_index(
+                ak,
+                sk,
+                cfg.get("OBS", "endpoint"),
+                bucket,
                 obs_prefix,
-                task_queue,
-                progress,
                 checkpoint,
-                reporter,
-                scan_workers
-            ),
-            daemon=True
-        )
+            )
+        except Exception:
+            set_status("index", "error")
+            raise
+        else:
+            set_status("index", "done")
 
-        scan_thread.start()
+    index_thread = threading.Thread(target=run_index, daemon=True)
+
+    scan_thread = None
+    scan_done_event = threading.Event()
+
+    def start_work():
+
+        nonlocal scan_thread
+
+        progress.start()
+        scheduler.start()
+        index_thread.start()
+
+        if os.path.isfile(local_dir):
+
+            st = os.stat(local_dir)
+
+            filename = os.path.basename(local_dir)
+
+            obs_key = "/".join(
+                filter(None, [obs_prefix.strip("/"), filename])
+            )
+
+            task = {
+                "local": local_dir,
+                "obs": obs_key,
+                "size": st.st_size
+            }
+
+            progress.add_total(st.st_size)
+            scan_done_event.set()
+            task_queue.put(task)
+
+        else:
+
+            def run_scan():
+                set_status("scan", "running")
+                try:
+                    scan_directory(
+                        local_dir,
+                        obs_prefix,
+                        task_queue,
+                        progress,
+                        checkpoint,
+                        reporter,
+                        scan_workers,
+                        scan_done_event,
+                    )
+                except Exception:
+                    set_status("scan", "error")
+                    scan_done_event.set()
+                    raise
+                else:
+                    set_status("scan", "done")
+
+            scan_thread = threading.Thread(
+                target=run_scan,
+                daemon=True
+            )
+
+            scan_thread.start()
 
     try:
 
         logging.info(f"Task Started. Log: {log_file}")
 
-        while True:
+        def work_finished():
 
             if os.path.isfile(local_dir):
+                return task_queue.unfinished_tasks == 0
 
-                if task_queue.empty():
-                    break
+            return (
+                scan_done_event.is_set() and
+                task_queue.unfinished_tasks == 0
+            )
 
-            else:
-
-                if not scan_thread.is_alive() and task_queue.empty():
-                    break
-
-            time.sleep(1)
+        dashboard.run_until(
+            work_finished,
+            poll_interval=0.2,
+            start_fn=start_work,
+        )
 
     except KeyboardInterrupt:
 
         logging.warning("用户手动停止任务")
 
     finally:
+
+        if scan_thread is not None:
+            scan_thread.join(timeout=5)
 
         scheduler.stop()
         progress.stop()

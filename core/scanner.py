@@ -48,10 +48,12 @@ def scan_directory(
         progress,
         checkpoint,
         reporter=None,
-        scan_workers = 4
+        scan_workers = 4,
+        scan_done_event=None,
 ):
 
     root_dir_bytes = os.fsencode(root_dir)
+    stop_token = object()
 
     logging.info(
         f"[SCAN] 扫描目录: {root_dir} "
@@ -91,10 +93,13 @@ def scan_directory(
 
         while True:
 
-            try:
-                current_dir_bytes = dir_queue.get()
-            except queue.Empty:
+            current_dir_bytes = dir_queue.get()
+
+            if current_dir_bytes is stop_token:
+                dir_queue.task_done()
                 return
+
+            progress.scan_worker_started()
 
             try:
 
@@ -151,7 +156,7 @@ def scan_directory(
                             local_path_bytes = entry.path
 
                             relative_bytes = local_path_bytes[len(root_dir_bytes):]
-                            relative_bytes = relative_bytes.lstrip(b"/")
+                            relative_bytes = relative_bytes.lstrip(b"/\\")
 
                             relative_clean_str = normalize_relative_path(relative_bytes)
 
@@ -188,10 +193,9 @@ def scan_directory(
                             # -------------------------
                             # 统计
                             # -------------------------
-                            progress.add_total(size)
+                            progress.record_scan_file(size)
 
                             with scanned_lock:
-                                progress.scan_files += 1
                                 total_scanned += 1
 
                                 if total_scanned % SCAN_BATCH == 0:
@@ -201,8 +205,7 @@ def scan_directory(
 
                         except Exception as inner_error:
 
-                            with scanned_lock:
-                                progress.scan_errors += 1
+                            progress.scan_error_inc()
 
                             report_skip(entry.path, f"scan_error({str(inner_error)[:30]})")
 
@@ -221,6 +224,7 @@ def scan_directory(
                 )
 
             finally:
+                progress.scan_worker_finished()
                 dir_queue.task_done()
 
     # 启动线程
@@ -235,8 +239,14 @@ def scan_directory(
 
     dir_queue.join()
 
+    if scan_done_event is not None:
+        scan_done_event.set()
+
+    for _ in range(scan_workers):
+        dir_queue.put(stop_token)
+
     for t in threads:
-        t.join(timeout=1)
+        t.join()
 
     elapsed_time = time.time() - start_time
 

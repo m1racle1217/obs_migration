@@ -6,7 +6,6 @@ core package
 
 OBS migration core modules
 """
-from .report import Reporter
 from .scanner import scan_directory
 from .scheduler import Scheduler
 from .uploader import OBSUploader, init_uploader

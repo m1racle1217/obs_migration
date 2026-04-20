@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import os
-import sys
 import logging
 import re
 import hashlib
@@ -175,7 +174,7 @@ WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
 
 
 def normalize_relative_path(relative_bytes):
-    """
+    r"""
     统一相对路径（核心函数）
 
     规则：

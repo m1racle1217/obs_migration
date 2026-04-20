@@ -1,15 +1,20 @@
 # core/uploader.py
 # -*- coding: utf-8 -*-
 
-import os
-import time
-import logging
-import threading
 import random
-
+import logging
+import os
+import threading
+import time
 
 from obs import ObsClient
-from .utils import fix_windows_path, safe_log, sanitize_key,clean_path_to_utf8,calc_file_md5
+from .utils import (
+    calc_file_md5,
+    clean_path_to_utf8,
+    fix_windows_path,
+    safe_log,
+    sanitize_key,
+)
 
 _client = None
 _bucket = None
@@ -40,7 +45,17 @@ def init_uploader(ak, sk, endpoint, bucket, part_size, threshold, rate_limit=200
 
 class OBSUploader:
 
-    def __init__(self,progress,checkpoint,reporter=None,failed_dir="failed",enable_head_check=True,strict_client_check=True,enable_etag_check=False):
+    def __init__(
+        self,
+        progress,
+        checkpoint,
+        reporter=None,
+        failed_dir="failed",
+        enable_head_check=True,
+        strict_client_check=True,
+        enable_etag_check=False,
+        retry_limit=3,
+    ):
 
         self.progress = progress
         self.checkpoint = checkpoint
@@ -50,6 +65,7 @@ class OBSUploader:
         self.enable_head_check = enable_head_check
         self.strict_client_check = strict_client_check
         self.enable_etag_check = enable_etag_check
+        self.retry_limit = max(1, int(retry_limit))
 
         self.lock = threading.Lock()
         os.makedirs(failed_dir, exist_ok=True)
@@ -109,14 +125,8 @@ class OBSUploader:
             except Exception:
                 row = None
             logging.debug(f"[INDEX_RESULT] key={obs_key} row={row}")
-            if row and row[0] == 0:
-                logging.debug(f"[DIRTY_INDEX] key={obs_key} row={row}")
-                dirty_index = True
-            else:
-                dirty_index = False
-
             if row:
-                remote_size, remote_etag = row
+                remote_size, _ = row
 
                 if remote_size == size:
 
@@ -191,7 +201,9 @@ class OBSUploader:
 
                                 logging.debug(f"[ETAG_CHECK] {obs_key}")
 
-                                local_etag = calc_file_md5(os.fsdecode(local_path_bytes))
+                                local_etag = calc_file_md5(
+                                    fix_windows_path(os.fsdecode(local_path_bytes))
+                                )
 
                                 if local_etag == remote_etag:
                                     head_status = "EXIST_SAME"
@@ -254,9 +266,9 @@ class OBSUploader:
         last_err = ""
 
         # ⚠️ 这里只在上传时转换（OBS SDK必须用str）
-        local_str_for_upload = os.fsdecode(local_path_bytes)
+        local_str_for_upload = fix_windows_path(os.fsdecode(local_path_bytes))
 
-        while retry < 3:
+        while retry < self.retry_limit:
 
             start = time.time()
 
@@ -299,7 +311,7 @@ class OBSUploader:
 
                 retry += 1
 
-                self.progress.upload_errors += 1
+                self.progress.upload_error_inc()
 
                 last_err = repr(e)
 
@@ -323,7 +335,7 @@ class OBSUploader:
             obs_key,
             size,
             "FAILED",
-            last_err or "retry exceeded"
+            last_err or f"retry exceeded ({self.retry_limit})"
         )
 
     # ==========================================================
