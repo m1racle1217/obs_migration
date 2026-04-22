@@ -393,7 +393,6 @@ def load_config():
 
     updated = False
 
-    # 自动补全
     for section, items in DEFAULT_CONFIG.items():
         if not cfg.has_section(section):
             cfg.add_section(section)
