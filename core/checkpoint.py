@@ -1,13 +1,21 @@
 # core/checkpoint.py
 # -*- coding: utf-8 -*-
+"""管理迁移断点状态与目标端对象索引缓存。"""
 
 import os
 import sqlite3
 import threading
 
 
+# ================================
+# 管理断点与目标索引
+# ================================
 class Checkpoint:
+    """使用 SQLite 保存已完成任务与目标端对象元数据。"""
 
+    # ================================
+    # 初始化断点管理器
+    # ================================
     def __init__(self, db_path, batch_size=500):
         self.obs_index_ready = False
 
@@ -29,6 +37,9 @@ class Checkpoint:
         self.load_index_flag()
         self._load_cache()
 
+    # ================================
+    # 初始化数据库结构
+    # ================================
     def _init_db(self):
 
         with self.lock:
@@ -73,6 +84,9 @@ class Checkpoint:
             )
             self.conn.commit()
 
+    # ================================
+    # 标记索引已就绪
+    # ================================
     def set_index_ready(self):
 
         with self.lock:
@@ -82,6 +96,9 @@ class Checkpoint:
             self.conn.commit()
             self.obs_index_ready = True
 
+    # ================================
+    # 加载索引状态
+    # ================================
     def load_index_flag(self):
 
         with self.lock:
@@ -91,6 +108,9 @@ class Checkpoint:
             row = cursor.fetchone()
             self.obs_index_ready = bool(row and row[0] == "1")
 
+    # ================================
+    # 重置目标端索引
+    # ================================
     def reset_obs_index(self):
 
         with self.lock:
@@ -101,10 +121,16 @@ class Checkpoint:
             self.conn.commit()
             self.obs_index_ready = False
 
+    # ================================
+    # 写入单条对象索引
+    # ================================
     def upsert_obs(self, key, size, etag=None):
 
         self.upsert_obs_many([(key, size, etag)])
 
+    # ================================
+    # 批量写入对象索引
+    # ================================
     def upsert_obs_many(self, rows):
 
         if not rows:
@@ -117,6 +143,9 @@ class Checkpoint:
             )
             self.conn.commit()
 
+    # ================================
+    # 查询对象索引
+    # ================================
     def get_obs(self, key):
 
         with self.lock:
@@ -126,6 +155,9 @@ class Checkpoint:
             )
             return cursor.fetchone()
 
+    # ================================
+    # 预加载完成缓存
+    # ================================
     def _load_cache(self):
 
         with self.lock:
@@ -136,6 +168,9 @@ class Checkpoint:
         for path, size, mtime in rows:
             self.cache[path] = (size, mtime)
 
+    # ================================
+    # 判断任务是否已完成
+    # ================================
     def is_done(self, path, size, mtime):
 
         rec = self.cache.get(self._normalize_path(path))
@@ -145,6 +180,9 @@ class Checkpoint:
         old_size, old_mtime = rec
         return old_size == size and old_mtime == mtime
 
+    # ================================
+    # 标记任务完成
+    # ================================
     def mark_done(self, path, size, mtime):
 
         safe = self._normalize_path(path)
@@ -160,6 +198,9 @@ class Checkpoint:
             if len(self.batch) >= self.batch_size:
                 self._flush_completed_locked()
 
+    # ================================
+    # 归一化路径
+    # ================================
     def _normalize_path(self, path):
 
         if isinstance(path, bytes):
@@ -170,6 +211,9 @@ class Checkpoint:
             "surrogatepass",
         )
 
+    # ================================
+    # 刷新完成批次
+    # ================================
     def _flush_completed_locked(self):
 
         if not self.batch:
@@ -182,6 +226,9 @@ class Checkpoint:
         self.conn.commit()
         self.batch.clear()
 
+    # ================================
+    # 关闭数据库连接
+    # ================================
     def close(self):
 
         with self.lock:

@@ -1,16 +1,36 @@
 # core/dashboard.py
 # -*- coding: utf-8 -*-
+"""使用 Rich 渲染迁移任务的实时仪表盘。"""
 
+import sys
 import time
 
-from rich.console import Console
+from rich import box
+from rich.console import Console, Group
 from rich.live import Live
+from rich.measure import Measurement
+from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress as RichProgress,
+    TextColumn,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
+)
 from rich.table import Table
-import sys
+from rich.text import Text
 
 
+# ================================
+# 渲染迁移仪表盘
+# ================================
 class Dashboard:
+    """实时渲染传输进度、线程状态与队列指标。"""
 
+    # ================================
+    # 初始化仪表盘
+    # ================================
     def __init__(
         self,
         progress,
@@ -20,6 +40,7 @@ class Dashboard:
         enabled=True,
         force_terminal=False,
         status_provider=None,
+        scan_controller=None,
     ):
 
         self.progress = progress
@@ -32,16 +53,48 @@ class Dashboard:
             file=sys.stdout,
         )
         self.status_provider = status_provider
+        self.scan_controller = scan_controller
+        self.progress_bar_column = BarColumn(
+            bar_width=40,
+            style="grey23",
+            complete_style="bright_red",
+            finished_style="bright_green",
+            pulse_style="red",
+        )
+        self.progress_bar = RichProgress(
+            TextColumn("[bold cyan]Transfer[/bold cyan]"),
+            self.progress_bar_column,
+            TextColumn("[bold white]{task.percentage:>3.0f}%[/bold white]"),
+            DownloadColumn(),
+            TransferSpeedColumn(),
+            TimeRemainingColumn(),
+            console=self.console,
+            expand=False,
+        )
+        self.progress_task_id = self.progress_bar.add_task(
+            "upload",
+            total=1,
+            completed=0,
+        )
         self.running = False
 
+    # ================================
+    # 启动仪表盘
+    # ================================
     def start(self):
 
         self.running = True
 
+    # ================================
+    # 停止仪表盘
+    # ================================
     def stop(self):
 
         self.running = False
 
+    # ================================
+    # 构建指标表格
+    # ================================
     def build_table(self):
 
         snapshot = self.progress.snapshot()
@@ -56,6 +109,7 @@ class Dashboard:
         upload_errors = snapshot["upload_errors"]
         cache_hit = snapshot["cache_hit"]
         cache_total = snapshot["cache_total"]
+        scan_active_workers = snapshot["scan_active_workers"]
         active_workers = self.scheduler.get_active_workers()
 
         status = {}
@@ -63,13 +117,26 @@ class Dashboard:
             status = self.status_provider()
 
         index_status = status.get("index", "unknown")
-        scan_status = status.get("scan", "unknown")
+        raw_scan_status = status.get("scan", "unknown")
+        scan_status = raw_scan_status
+        scan_worker_display = str(self.scan_workers)
+        target_scan_workers = None
+
+        if self.scan_controller is not None:
+            target_scan_workers = self.scan_controller.get_desired_workers()
+            scan_worker_display = f"{target_scan_workers}/{self.scan_workers}"
+
+        if scan_status == "running":
+            if target_scan_workers is not None:
+                scan_status = f"running ({scan_active_workers} active, target {target_scan_workers})"
+            else:
+                scan_status = f"running ({scan_active_workers} active)"
 
         if active_workers > 0:
             upload_status = f"running ({active_workers} active)"
         elif self.task_queue.unfinished_tasks > 0:
             upload_status = "queued"
-        elif scan_status in {"pending", "running"}:
+        elif raw_scan_status in {"pending", "running"}:
             upload_status = "waiting for scan"
         else:
             upload_status = "idle"
@@ -84,33 +151,119 @@ class Dashboard:
         elapsed = max(time.time() - snapshot["start_time"], 0.001)
         upload_speed = done / elapsed / 1024 / 1024
 
-        table = Table(title="OBS Migration Dashboard")
-        table.add_column("Metric")
-        table.add_column("Value")
+        queue_current = self.task_queue.qsize()
+        queue_max = getattr(self.task_queue, "maxsize", 0)
+        queue_display = str(queue_current) if queue_max <= 0 else f"{queue_current}/{queue_max}"
+
+        table = Table(
+            box=box.SIMPLE_HEAVY,
+            header_style="bold bright_white",
+            border_style="bright_blue",
+            row_styles=["none", "on grey11"],
+            expand=False,
+            pad_edge=False,
+        )
+        table.add_column("Metric", style="bold cyan", no_wrap=True)
+        table.add_column("Value", style="bright_white")
 
         table.add_row("Files Done", str(files_done))
         table.add_row("Upload Skip", str(files_skip))
         table.add_row("Scan Skip", str(scan_skip))
-        table.add_row("Index Status", index_status)
-        table.add_row("Scan Status", scan_status)
-        table.add_row("Upload Status", upload_status)
+        table.add_row("Index Status", self.render_status(index_status))
+        table.add_row("Scan Status", self.render_status(scan_status))
+        table.add_row("Upload Status", self.render_status(upload_status))
+        table.add_row("Progress", f"{done / 1024 / 1024:.1f}MB / {total / 1024 / 1024:.1f}MB")
         table.add_row("Cache Hit", f"{cache_hit}/{cache_total}")
         table.add_row("Hit Rate", f"{hit_rate:.1f}%")
-        table.add_row(
-            "Progress",
-            f"{done / 1024 / 1024:.1f}MB / {total / 1024 / 1024:.1f}MB",
-        )
         table.add_row("Scan Files", str(scan_files))
         table.add_row("Scan Speed", f"{scan_speed:.0f} files/s")
         table.add_row("Scan Errors", str(scan_errors))
         table.add_row("Upload Errors", str(upload_errors))
         table.add_row("Upload Speed", f"{upload_speed:.1f} MB/s")
-        table.add_row("Queue Size", str(self.task_queue.qsize()))
+        table.add_row("Queue Size", queue_display)
         table.add_row("Upload Workers", str(len(self.scheduler.threads)))
-        table.add_row("Scan Workers", str(self.scan_workers))
+        table.add_row("Scan Workers", scan_worker_display)
 
         return table
 
+    # ================================
+    # 渲染状态颜色
+    # ================================
+    def render_status(self, value):
+
+        text = str(value)
+        lowered = text.lower()
+
+        if "error" in lowered:
+            style = "bold bright_red"
+        elif lowered.startswith("running"):
+            style = "bold yellow"
+        elif lowered == "done":
+            style = "bold bright_green"
+        elif lowered in {"queued", "waiting for scan"}:
+            style = "bold magenta"
+        elif lowered == "pending":
+            style = "bold cyan"
+        else:
+            style = "bright_white"
+
+        return Text(text, style=style)
+
+    # ================================
+    # 构建进度条
+    # ================================
+    def build_progress_renderable(self, bar_width=None):
+
+        snapshot = self.progress.snapshot()
+        total = max(int(snapshot["total_bytes"] or 0), 0)
+        done = max(int(snapshot["done_bytes"] or 0), 0)
+        total_for_render = max(total, done, 1)
+
+        if bar_width is not None:
+            self.progress_bar_column.bar_width = max(24, min(40, int(bar_width)))
+
+        self.progress_bar.update(
+            self.progress_task_id,
+            total=total_for_render,
+            completed=min(done, total_for_render),
+        )
+        return self.progress_bar
+
+    # ================================
+    # 测量渲染宽度
+    # ================================
+    def measure_renderable_width(self, renderable):
+
+        measurement = Measurement.get(
+            self.console,
+            self.console.options,
+            renderable,
+        )
+        return max(20, measurement.maximum)
+
+    # ================================
+    # 构建整体渲染对象
+    # ================================
+    def build_renderable(self):
+
+        table = self.build_table()
+        table_width = self.measure_renderable_width(table)
+
+        content = Group(
+            self.build_progress_renderable(bar_width=max(24, table_width - 26)),
+            table,
+        )
+        return Panel(
+            content,
+            title="[bold bright_cyan]OBS Migration Dashboard[/bold bright_cyan]",
+            border_style="bright_blue",
+            padding=(0, 1),
+            expand=False,
+        )
+
+    # ================================
+    # 持续刷新直到结束
+    # ================================
     def run_until(self, done_fn, poll_interval=0.2, start_fn=None):
 
         self.running = True
@@ -123,18 +276,18 @@ class Dashboard:
             return
 
         with Live(
-            self.build_table(),
+            self.build_renderable(),
             refresh_per_second=max(1, int(1 / poll_interval)),
             console=self.console,
             transient=False,
         ) as live:
-            live.update(self.build_table(), refresh=True)
+            live.update(self.build_renderable(), refresh=True)
 
             if start_fn is not None:
                 start_fn()
 
             while self.running:
-                live.update(self.build_table(), refresh=True)
+                live.update(self.build_renderable(), refresh=True)
 
                 sys.stdout.flush()
 

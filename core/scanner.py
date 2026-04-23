@@ -1,5 +1,6 @@
 # core/scanner.py
 # -*- coding: utf-8 -*-
+"""扫描本地文件系统并将待迁移文件送入任务队列。"""
 
 import logging
 import os
@@ -23,6 +24,9 @@ IGNORE_FILES = (
 )
 
 
+# ================================
+# 扫描本地目录
+# ================================
 def scan_directory(
     root_dir,
     task_queue,
@@ -31,6 +35,7 @@ def scan_directory(
     reporter=None,
     scan_workers=4,
     scan_done_event=None,
+    scan_controller=None,
 ):
     root_dir_bytes = os.fsencode(root_dir)
     stop_token = object()
@@ -44,6 +49,9 @@ def scan_directory(
     total_scanned = 0
     scanned_lock = threading.Lock()
 
+    # ================================
+    # 记录扫描跳过项
+    # ================================
     def report_skip(path_bytes, reason):
         progress.scan_skip_inc()
         if reporter is None:
@@ -60,13 +68,21 @@ def scan_directory(
         except Exception:
             pass
 
+    # ================================
+    # 执行目录扫描工作线程
+    # ================================
     def worker():
         nonlocal total_scanned
 
         while True:
+            if scan_controller is not None and not scan_controller.acquire_slot():
+                return
+
             current_dir_bytes = dir_queue.get()
 
             if current_dir_bytes is stop_token:
+                if scan_controller is not None:
+                    scan_controller.release_slot()
                 dir_queue.task_done()
                 return
 
@@ -119,6 +135,11 @@ def scan_directory(
                                     "mtime": st.st_mtime,
                                 }
                             )
+                            if reporter is not None and hasattr(reporter, "track_task"):
+                                reporter.track_task(
+                                    clean_path_to_utf8(local_path_bytes),
+                                    size=size,
+                                )
 
                             progress.record_scan_file(size)
 
@@ -143,6 +164,8 @@ def scan_directory(
             finally:
                 progress.scan_worker_finished()
                 dir_queue.task_done()
+                if scan_controller is not None:
+                    scan_controller.release_slot()
 
     threads = []
     for _ in range(scan_workers):
@@ -154,6 +177,9 @@ def scan_directory(
 
     if scan_done_event is not None:
         scan_done_event.set()
+
+    if scan_controller is not None:
+        scan_controller.stop()
 
     for _ in range(scan_workers):
         dir_queue.put(stop_token)

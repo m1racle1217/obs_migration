@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-core package
+"""统一导出迁移核心组件与公共接口。"""
+from bootstrap_runtime import bootstrap_local_deps
 
-OBS migration core modules
-"""
+bootstrap_local_deps()
+
 from .scanner import scan_directory
 from .s3_scanner import scan_s3_objects
 from .scheduler import Scheduler
 from .uploader import OBSUploader, init_source_client, init_target, init_uploader
 from .ratelimiter import RateLimiter
 from .progress import Progress
+from .scan_control import AdaptiveScanController
 from .checkpoint import Checkpoint
 from .dashboard import Dashboard
 from .report import Reporter
@@ -42,6 +43,7 @@ __all__ = [
     # control
     "RateLimiter",
     "Progress",
+    "AdaptiveScanController",
     "Checkpoint",
 
     # utils

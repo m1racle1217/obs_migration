@@ -18,6 +18,12 @@ __pycache__/
 
 # Local temp/test artifacts
 .tmp_test/
+.tmp_bundle*/
 _ut_tmp/
 manual_py_test/
 test_write_dir/
+
+# Offline packaging artifacts
+vendor/
+dist/
+build/

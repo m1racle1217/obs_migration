@@ -1,4 +1,8 @@
+"""测试迁移核心组件与命令行辅助逻辑。"""
+
+import csv
 import io
+import json
 import os
 import queue
 import sqlite3
@@ -12,20 +16,35 @@ from unittest.mock import patch
 
 import obs_migrate
 import core.uploader as uploader_module
+from rich.panel import Panel
 from core.checkpoint import Checkpoint
+from core.dashboard import Dashboard
 from core.obs_index import build_obs_index
 from core.progress import Progress
+from core.report import Reporter
+from core.scan_control import AdaptiveScanController
 from core.s3_scanner import scan_s3_objects
 from core.scanner import scan_directory
 from core.uploader import OBSUploader
 from core.utils import build_object_uri, detect_storage_scheme
 
 
+# ================================
+# 内存版测试报告器
+# ================================
 class MemoryReporter:
+    """测试中使用的内存报告器，用于收集写出的报告记录。"""
 
+    # ================================
+    # 初始化内存报告器
+    # ================================
     def __init__(self):
         self.rows = []
+        self.tracked = []
 
+    # ================================
+    # 记录一条报告结果
+    # ================================
     def write(self, local, obs, size=0, status="UNKNOWN", msg=""):
         self.rows.append(
             {
@@ -37,9 +56,29 @@ class MemoryReporter:
             }
         )
 
+    # ================================
+    # 记录待处理任务
+    # ================================
+    def track_task(self, source_path, size=0, target_path="", msg=""):
+        self.tracked.append(
+            {
+                "source_path": source_path,
+                "target_path": target_path,
+                "size": size,
+                "msg": msg,
+            }
+        )
 
+
+# ================================
+# 测试断点管理器
+# ================================
 class CheckpointTests(unittest.TestCase):
+    """测试 SQLite 断点持久化与目标索引状态。"""
 
+    # ================================
+    # 验证批量刷盘与索引重置
+    # ================================
     def test_completed_batch_flushes_on_threshold_and_resets_obs_index(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "state" / "tasks.db"
@@ -72,13 +111,29 @@ class CheckpointTests(unittest.TestCase):
             checkpoint.close()
 
 
+# ================================
+# 测试对象索引构建
+# ================================
 class ObsIndexTests(unittest.TestCase):
+    """测试远端对象索引的构建与持久化。"""
 
+    # ================================
+    # 验证索引重建后可用
+    # ================================
     def test_build_obs_index_rebuilds_and_marks_ready(self):
+        # ================================
+        # 模拟分页列举客户端
+        # ================================
         class FakeObsClient:
+            # ================================
+            # 初始化假客户端
+            # ================================
             def __init__(self, *args, **kwargs):
                 self.calls = 0
 
+            # ================================
+            # 返回模拟分页结果
+            # ================================
             def listObjects(self, bucket, prefix="", marker=None, max_keys=1000):
                 self.calls += 1
                 if self.calls == 1:
@@ -118,8 +173,100 @@ class ObsIndexTests(unittest.TestCase):
             checkpoint.close()
 
 
-class ScannerTests(unittest.TestCase):
+# ================================
+# 测试结果报告器
+# ================================
+class ReporterTests(unittest.TestCase):
+    """测试已完成与未完成任务的 CSV / JSON 报告。"""
 
+    # ================================
+    # 验证关闭时补写未完成任务
+    # ================================
+    def test_reporter_flushes_unfinished_tasks_on_close(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            reporter = Reporter(tmp, "obs://src-bucket/source/prefix")
+            reporter.track_task("obs://src-bucket/source/prefix/a.txt", size=12)
+            reporter.track_task("obs://src-bucket/source/prefix/b.txt", size=34)
+            reporter.write(
+                "obs://src-bucket/source/prefix/a.txt",
+                "obs://dst-bucket/target/prefix/a.txt",
+                size=12,
+                status="SUCCESS",
+                msg="",
+            )
+            reporter.close(
+                pending_status="INTERRUPTED",
+                pending_message="detected_but_not_migrated",
+            )
+
+            with open(reporter.file, "r", encoding="utf-8") as fp:
+                rows = list(csv.DictReader(fp))
+
+            self.assertEqual(len(rows), 2)
+            by_source = {row["source_path"]: row for row in rows}
+            self.assertEqual(
+                by_source["obs://src-bucket/source/prefix/a.txt"]["status"],
+                "SUCCESS",
+            )
+            self.assertEqual(
+                by_source["obs://src-bucket/source/prefix/b.txt"]["status"],
+                "INTERRUPTED",
+            )
+            self.assertEqual(
+                by_source["obs://src-bucket/source/prefix/b.txt"]["target_path"],
+                "",
+            )
+            self.assertEqual(
+                by_source["obs://src-bucket/source/prefix/b.txt"]["size"],
+                "34",
+            )
+            self.assertEqual(
+                by_source["obs://src-bucket/source/prefix/b.txt"]["message"],
+                "detected_but_not_migrated",
+            )
+
+            with open(reporter.summary_file, "r", encoding="utf-8") as fp:
+                summary = json.load(fp)
+
+            self.assertEqual(summary["SUCCESS"], 1)
+            self.assertEqual(summary["INTERRUPTED"], 1)
+            self.assertEqual(summary["TOTAL_FILES"], 2)
+
+
+# ================================
+# 测试扫描逻辑
+# ================================
+class ScannerTests(unittest.TestCase):
+    """测试本地与远端扫描行为。"""
+
+    # ================================
+    # 验证扫描线程会随队列压力收缩
+    # ================================
+    def test_adaptive_scan_controller_scales_with_queue_pressure(self):
+        task_queue = queue.Queue(maxsize=10)
+        controller = AdaptiveScanController(
+            task_queue,
+            max_workers=8,
+            min_workers=1,
+            sample_interval=0,
+        )
+
+        self.assertEqual(controller.get_desired_workers(), 8)
+
+        for index in range(9):
+            task_queue.put(index)
+
+        self.assertLess(controller.get_desired_workers(), 8)
+        self.assertGreaterEqual(controller.get_desired_workers(), 1)
+
+        while not task_queue.empty():
+            task_queue.get_nowait()
+
+        self.assertEqual(controller.get_desired_workers(), 8)
+
+    # ================================
+    # 验证本地扫描入队与跳过记录
+    # ================================
     def test_scan_directory_enqueues_files_and_reports_skips(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -165,9 +312,25 @@ class ScannerTests(unittest.TestCase):
                 sorted(row["status"] for row in reporter.rows),
                 ["SKIP_SCAN", "SKIP_SCAN", "SKIP_SCAN"],
             )
+            self.assertEqual(
+                sorted(item["source_path"] for item in reporter.tracked),
+                sorted([
+                    str(root / "file.txt"),
+                    str(root / "sub" / "nested.bin"),
+                ]),
+            )
 
+    # ================================
+    # 验证远端对象扫描入队
+    # ================================
     def test_scan_s3_objects_enqueues_remote_objects(self):
+        # ================================
+        # 模拟源端对象列举客户端
+        # ================================
         class FakeSourceClient:
+            # ================================
+            # 返回模拟对象与子前缀
+            # ================================
             def listObjects(self, bucket, prefix="", marker=None, max_keys=1000, delimiter=None):
                 if prefix == "source/prefix/sub/":
                     return SimpleNamespace(
@@ -250,20 +413,46 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(reporter.rows[0]["status"], "SKIP_SCAN")
         self.assertEqual(reporter.rows[0]["msg"], "directory_marker")
         self.assertEqual(reporter.rows[0]["local"], "obs://src-bucket/source/prefix/folder")
+        self.assertEqual(
+            sorted(item["source_path"] for item in reporter.tracked),
+            sorted([
+                "obs://src-bucket/source/prefix/file.txt",
+                "obs://src-bucket/source/prefix/sub/data.bin",
+            ]),
+        )
 
 
+# ================================
+# 测试上传器逻辑
+# ================================
 class UploaderTests(unittest.TestCase):
+    """测试上传、复制、重试与跳过判定逻辑。"""
 
+    # ================================
+    # 验证失败重试次数受配置控制
+    # ================================
     def test_uploader_uses_configured_retry_limit_for_s3_target(self):
+        # ================================
+        # 模拟目标端客户端
+        # ================================
         class FakeTargetClient:
+            # ================================
+            # 初始化统计字段
+            # ================================
             def __init__(self):
                 self.head_calls = 0
                 self.put_calls = 0
 
+            # ================================
+            # 模拟目标端 HEAD 请求
+            # ================================
             def getObjectMetadata(self, bucket, key):
                 self.head_calls += 1
                 return SimpleNamespace(status=404, body=SimpleNamespace())
 
+            # ================================
+            # 模拟上传文件失败
+            # ================================
             def putFile(self, bucket, key, local_path):
                 self.put_calls += 1
                 return SimpleNamespace(status=500)
@@ -315,16 +504,31 @@ class UploaderTests(unittest.TestCase):
 
             checkpoint.close()
 
+    # ================================
+    # 验证小对象走流式上传
+    # ================================
     def test_uploader_streams_s3_source_for_small_s3_target_objects(self):
+        # ================================
+        # 模拟目标端内容上传客户端
+        # ================================
         class FakeTargetClient:
+            # ================================
+            # 初始化目标端统计字段
+            # ================================
             def __init__(self):
                 self.head_calls = 0
                 self.put_content_calls = []
 
+            # ================================
+            # 模拟目标端 HEAD 请求
+            # ================================
             def getObjectMetadata(self, bucket, key):
                 self.head_calls += 1
                 return SimpleNamespace(status=404, body=SimpleNamespace())
 
+            # ================================
+            # 模拟流式上传内容
+            # ================================
             def putContent(self, bucket, key, stream, headers=None):
                 self.put_content_calls.append(
                     {
@@ -336,7 +540,13 @@ class UploaderTests(unittest.TestCase):
                 )
                 return SimpleNamespace(status=200)
 
+        # ================================
+        # 模拟源端对象读取客户端
+        # ================================
         class FakeSourceClient:
+            # ================================
+            # 返回对象流内容
+            # ================================
             def getObject(self, bucket, key, headers=None):
                 return SimpleNamespace(
                     status=200,
@@ -404,16 +614,31 @@ class UploaderTests(unittest.TestCase):
 
             checkpoint.close()
 
+    # ================================
+    # 验证小对象优先服务端拷贝
+    # ================================
     def test_uploader_prefers_server_side_copy_for_small_s3_objects(self):
+        # ================================
+        # 模拟目标端拷贝客户端
+        # ================================
         class FakeTargetClient:
+            # ================================
+            # 初始化目标端统计字段
+            # ================================
             def __init__(self):
                 self.head_calls = 0
                 self.copy_calls = []
 
+            # ================================
+            # 模拟服务端拷贝
+            # ================================
             def copyObject(self, source_bucket, source_key, dest_bucket, dest_key):
                 self.copy_calls.append((source_bucket, source_key, dest_bucket, dest_key))
                 return SimpleNamespace(status=200)
 
+            # ================================
+            # 模拟目标端 HEAD 请求
+            # ================================
             def getObjectMetadata(self, bucket, key):
                 self.head_calls += 1
                 return SimpleNamespace(status=404, body=SimpleNamespace())
@@ -472,23 +697,44 @@ class UploaderTests(unittest.TestCase):
 
             checkpoint.close()
 
+    # ================================
+    # 验证大对象优先分片服务端拷贝
+    # ================================
     def test_uploader_prefers_server_side_multipart_copy_for_large_s3_objects(self):
+        # ================================
+        # 模拟分片拷贝目标端客户端
+        # ================================
         class FakeTargetClient:
+            # ================================
+            # 初始化分片调用记录
+            # ================================
             def __init__(self):
                 self.copy_part_calls = []
 
+            # ================================
+            # 模拟创建分片上传任务
+            # ================================
             def initiateMultipartUpload(self, bucket, key):
                 return SimpleNamespace(status=200, body=SimpleNamespace(uploadId="upload-1"))
 
+            # ================================
+            # 模拟执行分片拷贝
+            # ================================
             def copyPart(self, bucket, key, part_number, upload_id, copy_source, copySourceRange=None):
                 self.copy_part_calls.append(
                     (bucket, key, part_number, upload_id, copy_source, copySourceRange)
                 )
                 return SimpleNamespace(status=200, body=SimpleNamespace(etag=f"etag-{part_number}"))
 
+            # ================================
+            # 模拟完成分片上传
+            # ================================
             def completeMultipartUpload(self, bucket, key, upload_id, request):
                 return SimpleNamespace(status=200, body=SimpleNamespace(parts=request.parts))
 
+            # ================================
+            # 模拟中止分片上传
+            # ================================
             def abortMultipartUpload(self, bucket, key, upload_id):
                 return SimpleNamespace(status=204)
 
@@ -548,16 +794,31 @@ class UploaderTests(unittest.TestCase):
 
             checkpoint.close()
 
+    # ================================
+    # 验证索引未命中时跳过 HEAD
+    # ================================
     def test_uploader_skips_head_when_index_misses_target_key(self):
+        # ================================
+        # 模拟目标端上传客户端
+        # ================================
         class FakeTargetClient:
+            # ================================
+            # 初始化目标端统计字段
+            # ================================
             def __init__(self):
                 self.head_calls = 0
                 self.put_calls = 0
 
+            # ================================
+            # 模拟目标端 HEAD 请求
+            # ================================
             def getObjectMetadata(self, bucket, key):
                 self.head_calls += 1
                 return SimpleNamespace(status=404, body=SimpleNamespace())
 
+            # ================================
+            # 模拟直接上传文件
+            # ================================
             def putFile(self, bucket, key, local_path):
                 self.put_calls += 1
                 return SimpleNamespace(status=200)
@@ -605,6 +866,9 @@ class UploaderTests(unittest.TestCase):
 
             checkpoint.close()
 
+    # ================================
+    # 验证本地到本地复制
+    # ================================
     def test_uploader_copies_local_source_to_local_target(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -647,8 +911,17 @@ class UploaderTests(unittest.TestCase):
 
             checkpoint.close()
 
+    # ================================
+    # 验证远端对象下载到本地
+    # ================================
     def test_uploader_downloads_s3_source_to_local_target(self):
+        # ================================
+        # 模拟源端对象下载客户端
+        # ================================
         class FakeSourceClient:
+            # ================================
+            # 返回对象响应流
+            # ================================
             def getObject(self, bucket, key, headers=None):
                 return SimpleNamespace(
                     status=200,
@@ -699,8 +972,15 @@ class UploaderTests(unittest.TestCase):
             checkpoint.close()
 
 
+# ================================
+# 测试命令行与仪表盘辅助逻辑
+# ================================
 class EntryUiTests(unittest.TestCase):
+    """测试命令行环境处理与仪表盘相关辅助逻辑。"""
 
+    # ================================
+    # 验证模式输入归一化
+    # ================================
     def test_mode_normalization_supports_choices(self):
         self.assertEqual(obs_migrate._normalize_mode("local"), "local")
         self.assertEqual(obs_migrate._normalize_mode("LOCAL"), "local")
@@ -709,6 +989,9 @@ class EntryUiTests(unittest.TestCase):
         self.assertEqual(obs_migrate._normalize_mode("2"), "s3")
         self.assertEqual(obs_migrate._normalize_mode("", default="local"), "local")
 
+    # ================================
+    # 验证兼容旧版配置迁移
+    # ================================
     def test_load_config_migrates_legacy_obs_and_task_sections(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg_path = Path(tmp) / "config.ini"
@@ -746,12 +1029,18 @@ class EntryUiTests(unittest.TestCase):
             self.assertEqual(cfg.get("SOURCE", "path"), ".")
             self.assertEqual(cfg.get("SOURCE", "type"), "s3")
 
+    # ================================
+    # 验证默认界面开关
+    # ================================
     def test_ui_defaults_are_enabled(self):
         with patch.dict("os.environ", {}, clear=True):
             self.assertTrue(obs_migrate.should_prompt_config())
             self.assertTrue(obs_migrate.should_enable_dashboard())
             self.assertEqual(obs_migrate.should_force_terminal(), os.name == "nt")
 
+    # ================================
+    # 验证环境变量覆盖界面开关
+    # ================================
     def test_ui_env_overrides_are_honored(self):
         with patch.dict(
             "os.environ",
@@ -766,21 +1055,42 @@ class EntryUiTests(unittest.TestCase):
             self.assertFalse(obs_migrate.should_enable_dashboard())
             self.assertTrue(obs_migrate.should_force_terminal())
 
+    # ================================
+    # 验证本地扫描线程上限
+    # ================================
     def test_scan_workers_are_capped_to_reasonable_range(self):
         with patch("os.cpu_count", return_value=8):
             self.assertEqual(obs_migrate.resolve_scan_workers(1), 1)
             self.assertEqual(obs_migrate.resolve_scan_workers(8), 8)
             self.assertEqual(obs_migrate.resolve_scan_workers(128), 16)
 
+    # ================================
+    # 验证远端扫描线程上限
+    # ================================
     def test_remote_scan_workers_keep_higher_parallelism(self):
         self.assertEqual(obs_migrate.resolve_remote_scan_workers(1), 1)
         self.assertEqual(obs_migrate.resolve_remote_scan_workers(64), 64)
         self.assertEqual(obs_migrate.resolve_remote_scan_workers(256), 128)
 
+    # ================================
+    # 验证动态扫描最小线程下限
+    # ================================
+    def test_min_scan_workers_leave_small_adaptive_floor(self):
+        self.assertEqual(obs_migrate.resolve_min_scan_workers(1), 1)
+        self.assertEqual(obs_migrate.resolve_min_scan_workers(8), 1)
+        self.assertEqual(obs_migrate.resolve_min_scan_workers(16), 2)
+        self.assertEqual(obs_migrate.resolve_min_scan_workers(128), 4)
+
+    # ================================
+    # 验证支持直接输入配置编号
+    # ================================
     def test_prompt_config_action_supports_direct_index(self):
         with patch("builtins.input", side_effect=["7"]):
             self.assertEqual(obs_migrate._prompt_config_action({"7": ("SOURCE", "prefix")}), "7")
 
+    # ================================
+    # 验证根据端点识别存储协议
+    # ================================
     def test_detect_storage_scheme_for_obs_endpoint(self):
         scheme = detect_storage_scheme("obs.cn-south-1.myhuaweicloud.com")
         self.assertEqual(scheme, "obs")
@@ -789,6 +1099,9 @@ class EntryUiTests(unittest.TestCase):
             "obs://bucket/path/file.txt",
         )
 
+    # ================================
+    # 验证运行时路径跟随配置目录
+    # ================================
     def test_runtime_paths_resolve_from_config_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg_dir = Path(tmp) / "conf"
@@ -806,6 +1119,9 @@ class EntryUiTests(unittest.TestCase):
                     str(cfg_dir / "logs"),
                 )
 
+    # ================================
+    # 验证环境变量覆盖配置路径
+    # ================================
     def test_config_path_can_be_overridden_by_env_var(self):
         with tempfile.TemporaryDirectory() as tmp:
             external_cfg = Path(tmp) / "secure" / "config.ini"
@@ -815,6 +1131,58 @@ class EntryUiTests(unittest.TestCase):
                     obs_migrate.resolve_key_file(),
                     str(external_cfg.parent / ".config.key"),
                 )
+
+    # ================================
+    # 验证仪表盘展示活跃扫描线程
+    # ================================
+    def test_dashboard_shows_active_scan_workers(self):
+        progress = Progress()
+        progress.scan_worker_started()
+        progress.scan_worker_started()
+
+        dashboard = Dashboard(
+            progress,
+            queue.Queue(maxsize=10),
+            SimpleNamespace(get_active_workers=lambda: 0, threads=[object(), object()]),
+            scan_workers=8,
+            enabled=False,
+            status_provider=lambda: {"index": "done", "scan": "running"},
+            scan_controller=SimpleNamespace(get_desired_workers=lambda: 4),
+        )
+
+        table = dashboard.build_table()
+        rows = dict(zip(table.columns[0]._cells, table.columns[1]._cells))
+
+        self.assertEqual(str(rows["Scan Status"]), "running (2 active, target 4)")
+        self.assertEqual(rows["Queue Size"], "0/10")
+        self.assertEqual(rows["Scan Workers"], "4/8")
+
+    # ================================
+    # 验证仪表盘构建进度组件
+    # ================================
+    def test_dashboard_builds_rich_progress_renderable(self):
+        progress = Progress()
+        progress.record_scan_file(200)
+        progress.add_done(100)
+
+        dashboard = Dashboard(
+            progress,
+            queue.Queue(maxsize=10),
+            SimpleNamespace(get_active_workers=lambda: 1, threads=[object()]),
+            scan_workers=4,
+            enabled=False,
+            status_provider=lambda: {"index": "done", "scan": "running"},
+        )
+
+        renderable = dashboard.build_renderable()
+        self.assertIsInstance(renderable, Panel)
+        self.assertEqual(str(renderable.title), "[bold bright_cyan]OBS Migration Dashboard[/bold bright_cyan]")
+        self.assertGreaterEqual(dashboard.progress_bar_column.bar_width, 20)
+        self.assertFalse(renderable.expand)
+
+        table = dashboard.build_table()
+        rows = dict(zip(table.columns[0]._cells, table.columns[1]._cells))
+        self.assertEqual(rows["Progress"], "0.0MB / 0.0MB")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
-
+# core/s3_scanner.py
 # -*- coding: utf-8 -*-
+"""扫描远端 OBS / S3 兼容存储中的待迁移对象。"""
 
 import logging
 import queue
@@ -9,10 +10,16 @@ import time
 from .utils import build_object_uri, normalize_obs_key, sanitize_key, to_unix_timestamp
 
 
+# ================================
+# 归一化前缀
+# ================================
 def _normalize_prefix(prefix):
     return sanitize_key(normalize_obs_key(prefix or "")).strip("/")
 
 
+# ================================
+# 计算相对对象路径
+# ================================
 def _build_relative_key(source_key, source_prefix):
     source_key = sanitize_key(normalize_obs_key(source_key or "")).strip("/")
     source_prefix = _normalize_prefix(source_prefix)
@@ -28,6 +35,9 @@ def _build_relative_key(source_key, source_prefix):
     return relative_key
 
 
+# ================================
+# 提取子前缀
+# ================================
 def _extract_common_prefixes(body):
     for attr in ("commonPrefixs", "commonPrefixes", "commonPrefixList"):
         items = getattr(body, attr, None)
@@ -42,6 +52,9 @@ def _extract_common_prefixes(body):
                 yield sanitize_key(normalize_obs_key(prefix or ""))
 
 
+# ================================
+# 拉取对象列表
+# ================================
 def _list_objects(source_client, source_bucket, current_prefix, marker, delimiter=None):
     kwargs = {
         "prefix": current_prefix,
@@ -61,6 +74,9 @@ def _list_objects(source_client, source_bucket, current_prefix, marker, delimite
     return source_client.listObjects(source_bucket, **kwargs)
 
 
+# ================================
+# 扫描远端对象
+# ================================
 def scan_s3_objects(
     source_client,
     source_bucket,
@@ -71,6 +87,7 @@ def scan_s3_objects(
     scan_workers=1,
     scan_done_event=None,
     source_scheme="s3",
+    scan_controller=None,
 ):
     total_scanned = 0
     source_prefix = _normalize_prefix(source_prefix)
@@ -91,6 +108,9 @@ def scan_s3_objects(
         scan_workers,
     )
 
+    # ================================
+    # 记录待扫描前缀
+    # ================================
     def enqueue_prefix(prefix):
         normalized = sanitize_key(normalize_obs_key(prefix or ""))
         with seen_lock:
@@ -99,6 +119,9 @@ def scan_s3_objects(
             seen_prefixes.add(normalized)
         prefix_queue.put(normalized)
 
+    # ================================
+    # 扫描单个前缀分页
+    # ================================
     def scan_prefix(current_prefix):
         nonlocal total_scanned
 
@@ -164,6 +187,11 @@ def scan_s3_objects(
                         "etag": getattr(obj, "etag", None),
                     }
                 )
+                if reporter is not None and hasattr(reporter, "track_task"):
+                    reporter.track_task(
+                        source_display,
+                        size=size,
+                    )
 
                 progress.record_scan_file(size)
                 with total_lock:
@@ -176,30 +204,38 @@ def scan_s3_objects(
 
             marker = getattr(body, "next_marker", None)
 
+    # ================================
+    # 执行远端扫描工作线程
+    # ================================
     def worker():
-        progress.scan_worker_started()
-        try:
-            while True:
-                current_prefix = prefix_queue.get()
+        while True:
+            if scan_controller is not None and not scan_controller.acquire_slot(cancel_event=stop_event):
+                return
+
+            current_prefix = prefix_queue.get()
+            try:
+                if current_prefix is stop_token:
+                    return
+
+                if stop_event.is_set():
+                    continue
+
+                progress.scan_worker_started()
                 try:
-                    if current_prefix is stop_token:
-                        return
-
-                    if stop_event.is_set():
-                        continue
-
                     scan_prefix(current_prefix)
-                except Exception as exc:
-                    progress.scan_error_inc()
-                    stop_event.set()
-                    with error_lock:
-                        if first_error[0] is None:
-                            first_error[0] = exc
-                    logging.exception("[S3_SCAN][PREFIX_ERROR] prefix=%s", current_prefix)
                 finally:
-                    prefix_queue.task_done()
-        finally:
-            progress.scan_worker_finished()
+                    progress.scan_worker_finished()
+            except Exception as exc:
+                progress.scan_error_inc()
+                stop_event.set()
+                with error_lock:
+                    if first_error[0] is None:
+                        first_error[0] = exc
+                logging.exception("[S3_SCAN][PREFIX_ERROR] prefix=%s", current_prefix)
+            finally:
+                prefix_queue.task_done()
+                if scan_controller is not None:
+                    scan_controller.release_slot()
 
     worker_count = max(1, int(scan_workers or 1))
     enqueue_prefix(source_prefix)
@@ -212,6 +248,8 @@ def scan_s3_objects(
     try:
         prefix_queue.join()
     finally:
+        if scan_controller is not None:
+            scan_controller.stop()
         for _ in range(worker_count):
             prefix_queue.put(stop_token)
         for thread in threads:

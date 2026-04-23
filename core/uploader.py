@@ -1,5 +1,6 @@
 # core/uploader.py
 # -*- coding: utf-8 -*-
+"""执行本地与远端对象迁移的上传、复制与跳过判定逻辑。"""
 
 import logging
 import os
@@ -49,6 +50,9 @@ _source_uri_scheme = "s3"
 _source_endpoint_host = ""
 
 
+# ================================
+# 初始化目标端
+# ================================
 def init_target(
     target_type,
     part_size,
@@ -97,6 +101,9 @@ def init_target(
             os.makedirs(_target_root, exist_ok=True)
 
 
+# ================================
+# 兼容初始化上传器
+# ================================
 def init_uploader(*args, **kwargs):
     if args and isinstance(args[0], str) and args[0].strip().lower() in {TARGET_TYPE_LOCAL, TARGET_TYPE_S3}:
         return init_target(*args, **kwargs)
@@ -119,6 +126,9 @@ def init_uploader(*args, **kwargs):
     return init_target(*args, **kwargs)
 
 
+# ================================
+# 初始化源端客户端
+# ================================
 def init_source_client(ak, sk, endpoint, bucket):
     global _source_client, _source_bucket, _source_uri_scheme, _source_endpoint_host
 
@@ -138,12 +148,24 @@ def init_source_client(ak, sk, endpoint, bucket):
         _source_endpoint_host = ""
 
 
+# ================================
+# 源对象不存在异常
+# ================================
 class SourceObjectMissingError(FileNotFoundError):
+    """表示远端源对象在传输开始前已经不存在。"""
+
     pass
 
 
+# ================================
+# 上传执行器
+# ================================
 class OBSUploader:
+    """执行上传、下载、服务端拷贝与重试控制。"""
 
+    # ================================
+    # 初始化上传器
+    # ================================
     def __init__(
         self,
         progress,
@@ -170,6 +192,9 @@ class OBSUploader:
         self._server_side_copy_logged = False
         os.makedirs(failed_dir, exist_ok=True)
 
+    # ================================
+    # 分发上传任务
+    # ================================
     def upload(self, task):
         if self.strict_client_check and _target_type == TARGET_TYPE_S3 and _client is None:
             raise RuntimeError("target client not initialized")
@@ -181,6 +206,9 @@ class OBSUploader:
 
         self._upload_local_task(task)
 
+    # ================================
+    # 处理本地源任务
+    # ================================
     def _upload_local_task(self, task):
         local_path_bytes = task["local"]
         source_ref = task.get("source_path") or fix_windows_path(clean_path_to_utf8(local_path_bytes))
@@ -223,6 +251,9 @@ class OBSUploader:
             local_path_bytes=local_path_bytes,
         )
 
+    # ================================
+    # 处理远端源任务
+    # ================================
     def _upload_s3_task(self, task):
         if self.strict_client_check and _source_client is None:
             raise RuntimeError("source S3 client not initialized")
@@ -258,6 +289,9 @@ class OBSUploader:
             local_path_bytes=None,
         )
 
+    # ================================
+    # 带重试执行传输
+    # ================================
     def _upload_with_retry(
         self,
         source_ref,
@@ -332,6 +366,9 @@ class OBSUploader:
             last_err or f"retry exceeded ({self.retry_limit})",
         )
 
+    # ================================
+    # 判断是否可跳过
+    # ================================
     def _maybe_skip_existing(
         self,
         source_ref,
@@ -366,6 +403,9 @@ class OBSUploader:
             local_path_bytes,
         )
 
+    # ================================
+    # 远端目标跳过判断
+    # ================================
     def _maybe_skip_existing_s3(
         self,
         source_ref,
@@ -462,6 +502,9 @@ class OBSUploader:
 
         return False
 
+    # ================================
+    # 本地目标跳过判断
+    # ================================
     def _maybe_skip_existing_local(
         self,
         source_ref,
@@ -514,6 +557,9 @@ class OBSUploader:
 
         return False
 
+    # ================================
+    # 解析目标路径
+    # ================================
     def _resolve_target(self, relative_path):
         relative_path = sanitize_key(relative_path or "").strip("/")
         if _target_type == TARGET_TYPE_S3:
@@ -525,6 +571,9 @@ class OBSUploader:
         target_path = os.path.abspath(target_path)
         return target_path, target_path
 
+    # ================================
+    # 本地文件上传到对象存储
+    # ================================
     def _put_local_file_to_s3(self, local_path_bytes, target_key, size):
         local_path = fix_windows_path(os.fsdecode(local_path_bytes))
 
@@ -540,6 +589,9 @@ class OBSUploader:
 
         return _client.putFile(_bucket, target_key, local_path)
 
+    # ================================
+    # 本地文件复制到本地
+    # ================================
     def _copy_local_file_to_local(self, local_path_bytes, target_path):
         source_path = fix_windows_path(os.fsdecode(local_path_bytes))
         target_path = fix_windows_path(target_path)
@@ -547,6 +599,9 @@ class OBSUploader:
         shutil.copy2(source_path, target_path)
         return SimpleNamespace(status=200)
 
+    # ================================
+    # 远端对象复制到对象存储
+# ================================
     def _copy_s3_object_to_s3(self, source_bucket, source_key, target_key, size):
         if self._should_use_server_side_copy():
             resp = self._copy_s3_object_server_side(source_bucket, source_key, target_key, size)
@@ -564,6 +619,9 @@ class OBSUploader:
         finally:
             self._close_stream(stream)
 
+    # ================================
+    # 优先尝试服务端拷贝
+    # ================================
     def _copy_s3_object_server_side(self, source_bucket, source_key, target_key, size):
         try:
             if size >= _threshold:
@@ -611,6 +669,9 @@ class OBSUploader:
         )
         return None
 
+    # ================================
+    # 远端对象下载到本地
+    # ================================
     def _download_s3_to_local(self, source_bucket, source_key, target_path):
         stream = None
         target_path = fix_windows_path(target_path)
@@ -638,6 +699,9 @@ class OBSUploader:
         finally:
             self._close_stream(stream)
 
+    # ================================
+    # 流式分片复制
+    # ================================
     def _multipart_copy_from_s3(self, source_bucket, source_key, target_key, size):
         init_resp = _client.initiateMultipartUpload(_bucket, target_key)
         if init_resp.status >= 300:
@@ -700,6 +764,9 @@ class OBSUploader:
                 logging.debug("[ABORT_MULTIPART_FAIL] %s", abort_err)
             raise
 
+    # ================================
+    # 服务端分片复制
+    # ================================
     def _multipart_copy_from_s3_server_side(self, source_bucket, source_key, target_key, size):
         init_resp = _client.initiateMultipartUpload(_bucket, target_key)
         if init_resp.status >= 300:
@@ -753,6 +820,9 @@ class OBSUploader:
                 logging.debug("[ABORT_SERVER_COPY_FAIL] %s", abort_err)
             raise
 
+    # ================================
+    # 打开源对象流
+    # ================================
     def _open_source_stream(self, source_bucket, source_key, offset=None, part_size=None):
         headers = None
         if offset is not None and part_size is not None:
@@ -768,12 +838,18 @@ class OBSUploader:
 
         return resp.body.response
 
+    # ================================
+    # 归一化 ETag
+    # ================================
     @staticmethod
     def _normalize_etag(etag):
         if not etag:
             return None
         return str(etag).strip().strip('"')
 
+    # ================================
+    # 安全关闭流
+    # ================================
     @staticmethod
     def _close_stream(stream):
         if stream is None:
@@ -786,17 +862,26 @@ class OBSUploader:
         except Exception:
             pass
 
+    # ================================
+    # 确保父目录存在
+    # ================================
     @staticmethod
     def _ensure_parent_dir(path):
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
 
+    # ================================
+    # 解析本地 ETag
+    # ================================
     def _resolve_local_etag(self, local_path_bytes, size):
         if not local_path_bytes or size >= 100 * 1024 * 1024:
             return None
         return calc_file_md5(fix_windows_path(os.fsdecode(local_path_bytes)))
 
+    # ================================
+    # 判断是否启用服务端拷贝
+    # ================================
     def _should_use_server_side_copy(self):
         return (
             _target_type == TARGET_TYPE_S3
@@ -806,6 +891,9 @@ class OBSUploader:
             and _target_endpoint_host == _source_endpoint_host
         )
 
+    # ================================
+    # 按需关闭服务端拷贝
+    # ================================
     def _maybe_disable_server_side_copy(self, status=None, error=None):
         should_disable = status in {400, 401, 403, 405, 409, 501}
 
@@ -838,6 +926,9 @@ class OBSUploader:
             f" err={error}" if error is not None else "",
         )
 
+    # ================================
+    # 判断是否可直接比较 ETag
+    # ================================
     def _can_compare_with_etag(self, source_etag, remote_etag):
         if not self.enable_etag_check:
             return False
@@ -851,6 +942,9 @@ class OBSUploader:
             and "-" not in remote_etag
         )
 
+    # ================================
+    # 判断是否可与本地文件比较
+    # ================================
     def _can_compare_with_local_file(self, source_etag, target_path, size):
         if not self.enable_etag_check:
             return False
@@ -862,6 +956,9 @@ class OBSUploader:
         normalized = self._normalize_etag(source_etag)
         return bool(normalized and "-" not in normalized)
 
+    # ================================
+    # 写入报告
+    # ================================
     def _report(self, local, obs, size, status, msg):
         if not self.reporter:
             return
@@ -871,6 +968,9 @@ class OBSUploader:
         except Exception as e:
             logging.debug("[REPORT_FAIL] %s err=%s", obs, e)
 
+    # ================================
+    # 记录失败任务
+    # ================================
     def record_failed(self, path):
         failed_file = os.path.join(self.failed_dir, "failed.txt")
 
