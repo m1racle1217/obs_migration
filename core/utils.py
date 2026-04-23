@@ -5,6 +5,8 @@ import os
 import logging
 import re
 import hashlib
+from datetime import datetime
+from urllib.parse import urlparse
 
 
 # ================================
@@ -155,6 +157,104 @@ def sanitize_key(key):
     )
 
     return key
+
+
+def normalize_endpoint(endpoint):
+
+    text = (endpoint or "").strip()
+    if not text:
+        return ""
+
+    parsed = urlparse(text if "://" in text else f"https://{text}")
+    host = (parsed.netloc or parsed.path or "").strip().lower()
+    if ":" in host:
+        host = host.split(":", 1)[0]
+
+    return host
+
+
+def detect_storage_scheme(endpoint="", fallback="s3"):
+
+    host = normalize_endpoint(endpoint)
+    if not host:
+        return fallback
+
+    if (
+        host.startswith("obs.")
+        or ".obs." in host
+        or host.endswith(".myhuaweicloud.com")
+    ):
+        return "obs"
+
+    if (
+        host.startswith("oss-")
+        or ".oss-" in host
+        or host.endswith(".aliyuncs.com")
+    ):
+        return "oss"
+
+    if (
+        host == "storage.googleapis.com"
+        or host.endswith(".storage.googleapis.com")
+    ):
+        return "gs"
+
+    if host.endswith(".blob.core.windows.net"):
+        return "azblob"
+
+    return fallback
+
+
+def build_object_uri(bucket, key="", scheme="s3"):
+
+    normalized_scheme = (scheme or "s3").strip().lower() or "s3"
+    normalized_bucket = (bucket or "").strip()
+    normalized_key = sanitize_key(normalize_obs_key(key or "")).strip("/")
+
+    if normalized_key:
+        return f"{normalized_scheme}://{normalized_bucket}/{normalized_key}"
+
+    return f"{normalized_scheme}://{normalized_bucket}"
+
+
+def to_unix_timestamp(value):
+
+    if value is None:
+        return 0.0
+
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    if isinstance(value, datetime):
+        return value.timestamp()
+
+    if hasattr(value, "timestamp") and callable(value.timestamp):
+        try:
+            return float(value.timestamp())
+        except Exception:
+            pass
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return 0.0
+
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            pass
+
+        for fmt in (
+            "%Y-%m-%d %H:%M:%S",
+            "%Y/%m/%d %H:%M:%S",
+            "%a, %d %b %Y %H:%M:%S GMT",
+        ):
+            try:
+                return datetime.strptime(text, fmt).timestamp()
+            except Exception:
+                pass
+
+    return 0.0
 
 def safe_log(s):
 

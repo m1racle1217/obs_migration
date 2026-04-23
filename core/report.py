@@ -10,11 +10,11 @@ import json
 
 class Reporter:
 
-    def __init__(self, report_dir, local_dir):
+    def __init__(self, report_dir, source_label):
 
         os.makedirs(report_dir, exist_ok=True)
 
-        name = os.path.basename(os.path.normpath(local_dir)) or "root"
+        name = os.path.basename(os.path.normpath(source_label)) or "root"
         ts = time.strftime("%Y%m%d_%H%M%S")
 
         self.file = os.path.join(report_dir, f"{name}_{ts}.csv")
@@ -24,8 +24,8 @@ class Reporter:
         self.writer = csv.writer(self.fp)
 
         self.writer.writerow([
-            "local_path",
-            "obs_key",
+            "source_path",
+            "target_path",
             "size",
             "status",
             "message"

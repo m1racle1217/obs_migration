@@ -7,8 +7,9 @@ core package
 OBS migration core modules
 """
 from .scanner import scan_directory
+from .s3_scanner import scan_s3_objects
 from .scheduler import Scheduler
-from .uploader import OBSUploader, init_uploader
+from .uploader import OBSUploader, init_source_client, init_target, init_uploader
 from .ratelimiter import RateLimiter
 from .progress import Progress
 from .checkpoint import Checkpoint
@@ -27,12 +28,15 @@ __all__ = [
 
     # scanner
     "scan_directory",
+    "scan_s3_objects",
 
     # scheduler
     "Scheduler",
 
     # uploader
     "OBSUploader",
+    "init_source_client",
+    "init_target",
     "init_uploader",
 
     # control
