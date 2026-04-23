@@ -1,8 +1,13 @@
 import sqlite3
 import os
 
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-def init_db(db_dir="state"):
+
+def init_db(db_dir=None):
+    if db_dir is None:
+        db_dir = os.path.join(APP_DIR, "state")
+
     if not os.path.exists(db_dir):
         os.makedirs(db_dir)
 

@@ -789,6 +789,33 @@ class EntryUiTests(unittest.TestCase):
             "obs://bucket/path/file.txt",
         )
 
+    def test_runtime_paths_resolve_from_config_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_dir = Path(tmp) / "conf"
+            cfg_dir.mkdir(parents=True, exist_ok=True)
+            cfg_path = cfg_dir / "config.ini"
+
+            with patch.object(obs_migrate, "CONFIG_FILE", str(cfg_path)):
+                self.assertEqual(obs_migrate.resolve_config_file(), str(cfg_path))
+                self.assertEqual(
+                    obs_migrate.resolve_runtime_path("./state"),
+                    str(cfg_dir / "state"),
+                )
+                self.assertEqual(
+                    obs_migrate.resolve_runtime_path("logs"),
+                    str(cfg_dir / "logs"),
+                )
+
+    def test_config_path_can_be_overridden_by_env_var(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            external_cfg = Path(tmp) / "secure" / "config.ini"
+            with patch.dict(os.environ, {"OBS_MIGRATE_CONFIG": str(external_cfg)}, clear=False):
+                self.assertEqual(obs_migrate.resolve_config_file(), str(external_cfg))
+                self.assertEqual(
+                    obs_migrate.resolve_key_file(),
+                    str(external_cfg.parent / ".config.key"),
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

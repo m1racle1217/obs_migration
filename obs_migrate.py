@@ -32,7 +32,9 @@ init(autoreset=True)
 
 
 CONFIG_FILE = "config.ini"
+CONFIG_ENV_VAR = "OBS_MIGRATE_CONFIG"
 KEY_FILE = ".config.key"
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 SOURCE_SECTION = "SOURCE"
 TARGET_SECTION = "TARGET"
@@ -130,13 +132,43 @@ DEFAULT_CONFIG = {
 }
 
 
+def resolve_config_file():
+    config_from_env = (os.getenv(CONFIG_ENV_VAR) or "").strip()
+    if config_from_env:
+        return os.path.abspath(os.path.expanduser(config_from_env))
+    if os.path.isabs(CONFIG_FILE):
+        return CONFIG_FILE
+    return os.path.join(APP_DIR, CONFIG_FILE)
+
+
+def config_base_dir():
+    return os.path.dirname(os.path.abspath(resolve_config_file()))
+
+
+def resolve_key_file():
+    if os.path.isabs(KEY_FILE):
+        return KEY_FILE
+    return os.path.join(config_base_dir(), KEY_FILE)
+
+
+def resolve_runtime_path(path_value):
+    raw_value = (path_value or "").strip()
+    if not raw_value:
+        return config_base_dir()
+    if os.path.isabs(raw_value):
+        return raw_value
+    return os.path.abspath(os.path.join(config_base_dir(), raw_value))
+
+
 def load_cipher():
-    if not os.path.exists(KEY_FILE):
+    key_file = resolve_key_file()
+
+    if not os.path.exists(key_file):
         key = Fernet.generate_key()
-        with open(KEY_FILE, "wb") as f:
+        with open(key_file, "wb") as f:
             f.write(key)
     else:
-        with open(KEY_FILE, "rb") as f:
+        with open(key_file, "rb") as f:
             key = f.read()
 
     return Fernet(key)
@@ -166,8 +198,8 @@ def mask_secret(value):
 
 
 def ensure_dirs():
-    for directory in ["logs", "state", "failed"]:
-        os.makedirs(directory, exist_ok=True)
+    for directory in ("./logs", "./state", "./failed"):
+        os.makedirs(resolve_runtime_path(directory), exist_ok=True)
 
 
 def parse_env_bool(name):
@@ -368,7 +400,7 @@ def init_config():
                 print(f"\n{desc}")
 
             if _is_sensitive(section, key):
-                print("注意：敏感信息会以加密形式写入 config.ini")
+                print(f"注意：敏感信息会以加密形式写入 {resolve_config_file()}")
 
             if key == "type":
                 section_label = "source" if section == SOURCE_SECTION else "target"
@@ -381,7 +413,7 @@ def init_config():
             cfg[section][key] = _maybe_encrypt_for_store(section, key, value)
 
     write_config_with_comments(cfg)
-    print("\n配置文件已生成：config.ini\n")
+    print(f"\n配置文件已生成：{resolve_config_file()}\n")
     return cfg
 
 
@@ -434,7 +466,7 @@ def modify_config(cfg, initial_choice=None, mapping=None):
             print(desc)
 
         if _is_sensitive(section, key):
-            print("注意：敏感信息会以加密形式写入 config.ini")
+            print(f"注意：敏感信息会以加密形式写入 {resolve_config_file()}")
 
         if key == "type" and section in {SOURCE_SECTION, TARGET_SECTION}:
             section_label = "source" if section == SOURCE_SECTION else "target"
@@ -467,11 +499,12 @@ def _prompt_config_action(mapping):
 
 
 def load_config():
-    if not os.path.exists(CONFIG_FILE):
+    config_file = resolve_config_file()
+    if not os.path.exists(config_file):
         return init_config()
 
     cfg = configparser.ConfigParser()
-    cfg.read(CONFIG_FILE, encoding="utf-8")
+    cfg.read(config_file, encoding="utf-8")
 
     updated = False
     if _migrate_legacy_target_section(cfg):
@@ -500,7 +533,7 @@ def load_config():
 
     if updated:
         write_config_with_comments(cfg)
-        print("\n检测到新配置项，已自动更新 config.ini\n")
+        print(f"\n检测到新配置项，已自动更新 {resolve_config_file()}\n")
 
     if should_prompt_config(cfg):
         mapping = show_config(cfg)
@@ -514,7 +547,7 @@ def load_config():
 
 
 def write_config_with_comments(cfg):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+    with open(resolve_config_file(), "w", encoding="utf-8") as f:
         for section in _ordered_sections(cfg):
             f.write("# ------------------------------\n")
             f.write(f"# {section}\n")
@@ -670,9 +703,9 @@ def main():
     retry_limit = cfg.getint("UPLOAD", "retry")
     rate_limit = cfg.getint("UPLOAD", "rate_limit")
 
-    log_dir = cfg.get("PATH", "log_dir")
-    state_dir = cfg.get("PATH", "state_dir")
-    failed_dir = cfg.get("PATH", "failed_dir")
+    log_dir = resolve_runtime_path(cfg.get("PATH", "log_dir"))
+    state_dir = resolve_runtime_path(cfg.get("PATH", "state_dir"))
+    failed_dir = resolve_runtime_path(cfg.get("PATH", "failed_dir"))
 
     requested_scan_workers = cfg.getint("SCAN", "scan_workers", fallback=4)
     if source_type == MODE_LOCAL:
@@ -684,7 +717,7 @@ def main():
     strict_check = cfg.getboolean("CHECK", "strict_client_check", fallback=True)
     enable_etag = cfg.getboolean("CHECK", "enable_etag_check", fallback=False)
 
-    report_dir = os.path.join(os.getcwd(), "check_report")
+    report_dir = resolve_runtime_path("./check_report")
     os.makedirs(report_dir, exist_ok=True)
 
     log_file = build_log_file(log_dir, source_label)
