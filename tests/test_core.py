@@ -1062,7 +1062,7 @@ class EntryUiTests(unittest.TestCase):
         with patch("os.cpu_count", return_value=8):
             self.assertEqual(obs_migrate.resolve_scan_workers(1), 1)
             self.assertEqual(obs_migrate.resolve_scan_workers(8), 8)
-            self.assertEqual(obs_migrate.resolve_scan_workers(128), 16)
+            self.assertEqual(obs_migrate.resolve_scan_workers(128), 32)
 
     # ================================
     # 验证远端扫描线程上限
@@ -1183,6 +1183,32 @@ class EntryUiTests(unittest.TestCase):
         table = dashboard.build_table()
         rows = dict(zip(table.columns[0]._cells, table.columns[1]._cells))
         self.assertEqual(rows["Progress"], "0.0MB / 0.0MB")
+
+    # ================================
+    # 验证大容量场景进度条显示精度
+    # ================================
+    def test_dashboard_progress_bar_keeps_large_total_precision(self):
+        progress = Progress()
+        progress.record_scan_file(2 * 1024 ** 4)
+        progress.add_done(5 * 1024 ** 3)
+
+        dashboard = Dashboard(
+            progress,
+            queue.Queue(maxsize=10),
+            SimpleNamespace(get_active_workers=lambda: 1, threads=[object()]),
+            scan_workers=4,
+            enabled=False,
+            status_provider=lambda: {"index": "done", "scan": "running"},
+        )
+
+        with patch("core.dashboard.time.time", return_value=progress.start_time + 10):
+            dashboard.build_progress_renderable()
+
+        task = dashboard.progress_bar.tasks[dashboard.progress_task_id]
+        self.assertEqual(task.fields["progress_pct"], "0.24%")
+        self.assertEqual(task.fields["progress_detail"], "5.0GB/2.0TB")
+        self.assertEqual(task.fields["speed_detail"], "512.0MB/s")
+        self.assertTrue(task.fields["eta_detail"].startswith("01"))
 
 
 if __name__ == "__main__":

@@ -12,11 +12,8 @@ from rich.measure import Measurement
 from rich.panel import Panel
 from rich.progress import (
     BarColumn,
-    DownloadColumn,
     Progress as RichProgress,
     TextColumn,
-    TimeRemainingColumn,
-    TransferSpeedColumn,
 )
 from rich.table import Table
 from rich.text import Text
@@ -64,10 +61,10 @@ class Dashboard:
         self.progress_bar = RichProgress(
             TextColumn("[bold cyan]Transfer[/bold cyan]"),
             self.progress_bar_column,
-            TextColumn("[bold white]{task.percentage:>3.0f}%[/bold white]"),
-            DownloadColumn(),
-            TransferSpeedColumn(),
-            TimeRemainingColumn(),
+            TextColumn("[bold white]{task.fields[progress_pct]}[/bold white]"),
+            TextColumn("[bright_white]{task.fields[progress_detail]}[/bright_white]"),
+            TextColumn("[bright_white]{task.fields[speed_detail]}[/bright_white]"),
+            TextColumn("[bright_black]{task.fields[eta_detail]}[/bright_black]"),
             console=self.console,
             expand=False,
         )
@@ -75,6 +72,10 @@ class Dashboard:
             "upload",
             total=1,
             completed=0,
+            progress_pct="0.0%",
+            progress_detail="0B/0B",
+            speed_detail="0.0B/s",
+            eta_detail="--:--:--",
         )
         self.running = False
 
@@ -210,6 +211,55 @@ class Dashboard:
         return Text(text, style=style)
 
     # ================================
+    # 格式化字节大小
+    # ================================
+    @staticmethod
+    def format_bytes(value):
+
+        size = float(max(value or 0, 0))
+        units = ["B", "KB", "MB", "GB", "TB", "PB"]
+
+        for unit in units:
+            if size < 1024 or unit == units[-1]:
+                if unit == "B":
+                    return f"{size:.0f}{unit}"
+                return f"{size:.1f}{unit}"
+            size /= 1024
+
+        return "0B"
+
+    # ================================
+    # 格式化进度百分比
+    # ================================
+    @staticmethod
+    def format_progress_pct(done, total):
+
+        total_for_ratio = max(float(total or 0), float(done or 0), 1.0)
+        percent = max(0.0, min(float(done or 0) / total_for_ratio * 100.0, 100.0))
+
+        if percent < 1:
+            return f"{percent:.2f}%"
+        if percent < 10:
+            return f"{percent:.1f}%"
+        return f"{percent:.0f}%"
+
+    # ================================
+    # 格式化剩余时间
+    # ================================
+    @staticmethod
+    def format_eta(seconds):
+
+        if seconds is None or seconds < 0:
+            return "--:--:--"
+
+        total_seconds = int(seconds)
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+        if hours >= 100:
+            return f"{hours}:{minutes:02d}:{secs:02d}"
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+    # ================================
     # 构建进度条
     # ================================
     def build_progress_renderable(self, bar_width=None):
@@ -218,6 +268,10 @@ class Dashboard:
         total = max(int(snapshot["total_bytes"] or 0), 0)
         done = max(int(snapshot["done_bytes"] or 0), 0)
         total_for_render = max(total, done, 1)
+        elapsed = max(time.time() - snapshot["start_time"], 0.001)
+        speed = done / elapsed if done > 0 else 0.0
+        remaining = max(total_for_render - done, 0)
+        eta_seconds = (remaining / speed) if speed > 0 else None
 
         if bar_width is not None:
             self.progress_bar_column.bar_width = max(24, min(40, int(bar_width)))
@@ -226,6 +280,10 @@ class Dashboard:
             self.progress_task_id,
             total=total_for_render,
             completed=min(done, total_for_render),
+            progress_pct=self.format_progress_pct(done, total_for_render),
+            progress_detail=f"{self.format_bytes(done)}/{self.format_bytes(total_for_render)}",
+            speed_detail=f"{self.format_bytes(speed)}/s",
+            eta_detail=self.format_eta(eta_seconds),
         )
         return self.progress_bar
 
