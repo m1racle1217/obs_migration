@@ -380,8 +380,9 @@ def should_force_terminal():
 # 计算本地扫描线程数
 # ================================
 def resolve_scan_workers(requested):
+    requested = max(1, int(requested or 1))
     cpu_count = os.cpu_count() or 4
-    recommended = max(2, min(32, cpu_count * 2))
+    recommended = max(4, min(64, cpu_count * 4))
     return max(1, min(requested, recommended))
 
 
@@ -921,14 +922,19 @@ def main():
     logging.getLogger().propagate = False
 
     if scan_workers != requested_scan_workers:
+        if source_type == MODE_LOCAL:
+            adjust_reason = f"本地扫描按 CPU 自适应限流（当前上限 {scan_workers}）"
+        else:
+            adjust_reason = f"远端扫描线程上限为 {scan_workers}"
         print(
-            f"\n⚠️ 扫描线程配置过高，已从 {requested_scan_workers} 自动调整为 {scan_workers}\n"
+            f"\n⚠️ 扫描线程配置过高，已从 {requested_scan_workers} 自动调整为 {scan_workers}（{adjust_reason}）\n"
         )
         logging.warning(
-            "[SCAN] requested workers=%s adjusted to %s for source_type=%s",
+            "[SCAN] requested workers=%s adjusted to %s for source_type=%s reason=%s",
             requested_scan_workers,
             scan_workers,
             source_type,
+            adjust_reason,
         )
 
     db_path = os.path.join(state_dir, "tasks.db")

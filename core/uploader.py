@@ -324,8 +324,7 @@ class OBSUploader:
 
             try:
                 if _limiter:
-                    tokens_needed = max(1, int(size / (512 * 1024)))
-                    _limiter.acquire(tokens_needed)
+                    _limiter.acquire()
 
                 resp = transfer_fn()
                 if resp.status < 300:

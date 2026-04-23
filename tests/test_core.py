@@ -617,6 +617,82 @@ class UploaderTests(unittest.TestCase):
     # ================================
     # 验证小对象优先服务端拷贝
     # ================================
+    def test_uploader_uses_single_rate_limit_token_per_transfer(self):
+        class FakeLimiter:
+            def __init__(self):
+                self.calls = []
+
+            def acquire(self, tokens=1):
+                self.calls.append(tokens)
+
+        class FakeTargetClient:
+            def __init__(self):
+                self.copy_calls = []
+
+            def getObjectMetadata(self, bucket, key):
+                return SimpleNamespace(status=404, body=SimpleNamespace())
+
+            def copyObject(self, source_bucket, source_key, dest_bucket, dest_key):
+                self.copy_calls.append((source_bucket, source_key, dest_bucket, dest_key))
+                return SimpleNamespace(status=200)
+
+        huge_size = 6 * 1024 * 1024 * 1024
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            progress = Progress()
+            checkpoint = Checkpoint(str(root / "state" / "tasks.db"))
+            checkpoint.set_index_ready()
+            fake_target = FakeTargetClient()
+            fake_limiter = FakeLimiter()
+
+            uploader = OBSUploader(
+                progress,
+                checkpoint,
+                reporter=MemoryReporter(),
+                failed_dir=str(root / "failed"),
+                retry_limit=2,
+            )
+
+            with patch.object(uploader_module, "_target_type", "s3"), \
+                    patch.object(uploader_module, "_client", fake_target), \
+                    patch.object(uploader_module, "_bucket", "dst-bucket"), \
+                    patch.object(uploader_module, "_target_prefix", "backup"), \
+                    patch.object(uploader_module, "_target_uri_scheme", "obs"), \
+                    patch.object(uploader_module, "_target_endpoint_host", "obs.cn-south-1.myhuaweicloud.com"), \
+                    patch.object(uploader_module, "_threshold", huge_size + 1), \
+                    patch.object(uploader_module, "_part_size", 128 * 1024 * 1024), \
+                    patch.object(uploader_module, "_limiter", fake_limiter), \
+                    patch.object(uploader_module, "_source_client", object()), \
+                    patch.object(uploader_module, "_source_bucket", "src-bucket"), \
+                    patch.object(uploader_module, "_source_uri_scheme", "obs"), \
+                    patch.object(uploader_module, "_source_endpoint_host", "obs.cn-south-1.myhuaweicloud.com"):
+                uploader.upload(
+                    {
+                        "source_type": "s3",
+                        "source_bucket": "src-bucket",
+                        "source_key": "path/huge.bin",
+                        "source_path": "s3://src-bucket/path/huge.bin",
+                        "source_display": "obs://src-bucket/path/huge.bin",
+                        "relative_path": "huge.bin",
+                        "size": huge_size,
+                        "mtime": 123.0,
+                        "etag": "etag-a",
+                    }
+                )
+
+            self.assertEqual(fake_limiter.calls, [1])
+            self.assertEqual(
+                fake_target.copy_calls,
+                [("src-bucket", "path/huge.bin", "dst-bucket", "backup/huge.bin")],
+            )
+
+            snapshot = progress.snapshot()
+            self.assertEqual(snapshot["files_done"], 1)
+            self.assertEqual(snapshot["done_bytes"], huge_size)
+
+            checkpoint.close()
+
     def test_uploader_prefers_server_side_copy_for_small_s3_objects(self):
         # ================================
         # 模拟目标端拷贝客户端
@@ -1062,7 +1138,7 @@ class EntryUiTests(unittest.TestCase):
         with patch("os.cpu_count", return_value=8):
             self.assertEqual(obs_migrate.resolve_scan_workers(1), 1)
             self.assertEqual(obs_migrate.resolve_scan_workers(8), 8)
-            self.assertEqual(obs_migrate.resolve_scan_workers(128), 16)
+            self.assertEqual(obs_migrate.resolve_scan_workers(128), 32)
 
     # ================================
     # 验证远端扫描线程上限
@@ -1183,6 +1259,32 @@ class EntryUiTests(unittest.TestCase):
         table = dashboard.build_table()
         rows = dict(zip(table.columns[0]._cells, table.columns[1]._cells))
         self.assertEqual(rows["Progress"], "0.0MB / 0.0MB")
+
+    # ================================
+    # 验证大容量场景进度条显示精度
+    # ================================
+    def test_dashboard_progress_bar_keeps_large_total_precision(self):
+        progress = Progress()
+        progress.record_scan_file(2 * 1024 ** 4)
+        progress.add_done(5 * 1024 ** 3)
+
+        dashboard = Dashboard(
+            progress,
+            queue.Queue(maxsize=10),
+            SimpleNamespace(get_active_workers=lambda: 1, threads=[object()]),
+            scan_workers=4,
+            enabled=False,
+            status_provider=lambda: {"index": "done", "scan": "running"},
+        )
+
+        with patch("core.dashboard.time.time", return_value=progress.start_time + 10):
+            dashboard.build_progress_renderable()
+
+        task = dashboard.progress_bar.tasks[dashboard.progress_task_id]
+        self.assertEqual(task.fields["progress_pct"], "0.24%")
+        self.assertEqual(task.fields["progress_detail"], "5.0GB/2.0TB")
+        self.assertEqual(task.fields["speed_detail"], "512.0MB/s")
+        self.assertTrue(task.fields["eta_detail"].startswith("01"))
 
 
 if __name__ == "__main__":
