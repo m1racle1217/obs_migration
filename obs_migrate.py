@@ -1537,7 +1537,7 @@ def _ensure_secret_fields_encrypted(cfg):
 # ================================
 # 主流程
 # ================================
-def main():
+def _legacy_main():
     ensure_dirs()
 
     cfg = load_config()
