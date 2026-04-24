@@ -16,7 +16,7 @@ class Checkpoint:
     # ================================
     # 初始化断点管理器
     # ================================
-    def __init__(self, db_path, batch_size=500):
+    def __init__(self, db_path, batch_size=500, obs_index_batch_size=20000):
         self.obs_index_ready = False
 
         dir_path = os.path.dirname(db_path)
@@ -32,6 +32,8 @@ class Checkpoint:
         self.cache = {}
         self.batch = []
         self.batch_size = batch_size
+        self.obs_batch = []
+        self.obs_index_batch_size = max(int(obs_index_batch_size or 20000), 1000)
 
         self._init_db()
         self.load_index_flag()
@@ -47,6 +49,12 @@ class Checkpoint:
 
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA synchronous=NORMAL")
+            try:
+                cursor.execute("PRAGMA temp_store=MEMORY")
+                cursor.execute("PRAGMA cache_size=-65536")
+                cursor.execute("PRAGMA mmap_size=268435456")
+            except Exception:
+                pass
 
             cursor.execute(
                 """
@@ -90,6 +98,7 @@ class Checkpoint:
     def set_index_ready(self):
 
         with self.lock:
+            self._flush_obs_index_locked()
             self.conn.execute(
                 "INSERT OR REPLACE INTO meta(key,value) VALUES('obs_index_ready','1')"
             )
@@ -114,6 +123,7 @@ class Checkpoint:
     def reset_obs_index(self):
 
         with self.lock:
+            self.obs_batch.clear()
             self.conn.execute("DELETE FROM obs_objects")
             self.conn.execute(
                 "INSERT OR REPLACE INTO meta(key,value) VALUES('obs_index_ready','0')"
@@ -137,11 +147,9 @@ class Checkpoint:
             return
 
         with self.lock:
-            self.conn.executemany(
-                "INSERT OR REPLACE INTO obs_objects(key,size,etag) VALUES(?,?,?)",
-                rows,
-            )
-            self.conn.commit()
+            self.obs_batch.extend(rows)
+            if len(self.obs_batch) >= self.obs_index_batch_size:
+                self._flush_obs_index_locked()
 
     # ================================
     # 查询对象索引
@@ -154,6 +162,14 @@ class Checkpoint:
                 (key,),
             )
             return cursor.fetchone()
+
+    # ================================
+    # 刷新对象索引批次
+    # ================================
+    def flush_obs_index(self):
+
+        with self.lock:
+            self._flush_obs_index_locked()
 
     # ================================
     # 预加载完成缓存
@@ -227,10 +243,26 @@ class Checkpoint:
         self.batch.clear()
 
     # ================================
+    # 刷新对象索引批次
+    # ================================
+    def _flush_obs_index_locked(self):
+
+        if not self.obs_batch:
+            return
+
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO obs_objects(key,size,etag) VALUES(?,?,?)",
+            self.obs_batch,
+        )
+        self.conn.commit()
+        self.obs_batch.clear()
+
+    # ================================
     # 关闭数据库连接
     # ================================
     def close(self):
 
         with self.lock:
+            self._flush_obs_index_locked()
             self._flush_completed_locked()
             self.conn.close()

@@ -257,9 +257,13 @@ class Dashboard:
             style = "bold bright_red"
         elif lowered.startswith("running"):
             style = "bold yellow"
-        elif lowered == "done":
+        elif lowered.startswith("done"):
             style = "bold bright_green"
-        elif lowered in {"queued", "waiting for scan", "waiting for check"}:
+        elif (
+            lowered == "queued"
+            or lowered.startswith("waiting for scan")
+            or lowered.startswith("waiting for check")
+        ):
             style = "bold magenta"
         elif lowered == "pending":
             style = "bold cyan"

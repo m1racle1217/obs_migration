@@ -1937,7 +1937,8 @@ def main():
 
     db_path = os.path.join(state_dir, "tasks.db")
     checkpoint = Checkpoint(db_path)
-    checkpoint.reset_obs_index()
+    if target_type == MODE_S3 and compare_mode != "head_only":
+        checkpoint.reset_obs_index()
 
     is_local_single_file = source_type == MODE_LOCAL and os.path.isfile(source_path)
     progress = Progress()
@@ -2014,8 +2015,12 @@ def main():
         stall_timeout=worker_stall_timeout,
     )
 
+    enable_index_build = target_type == MODE_S3 and compare_mode != "head_only"
+    index_workers = min(8, max(2, checker_workers // 32)) if enable_index_build else 1
+    index_stop_event = threading.Event() if enable_index_build else None
+
     pipeline_status = {
-        "index": "pending" if target_type == MODE_S3 else "n/a",
+        "index": "pending" if enable_index_build else "n/a",
         "scan": "n/a" if is_local_single_file else "pending",
         "check": "pending",
     }
@@ -2051,31 +2056,34 @@ def main():
     )
 
     def run_index():
-        if target_type != MODE_S3:
+        if not enable_index_build:
             set_status("index", "n/a")
             return
 
         set_status("index", "running")
         try:
-            build_obs_index(
+            completed = build_obs_index(
                 target_ak,
                 target_sk,
                 target_endpoint,
                 target_bucket,
                 target_prefix,
                 checkpoint,
+                stop_event=index_stop_event,
                 low_level_retries=low_level_retries,
                 low_level_retry_sleep=low_level_retry_sleep,
                 request_timeout=request_timeout,
+                workers=index_workers,
+                governor=uploader_module._governor,
             )
         except Exception as exc:
             set_status("index", "error")
             record_background_error(exc)
             raise
         else:
-            set_status("index", "done")
+            set_status("index", "done" if completed else "done (early stop)")
 
-    index_thread = threading.Thread(target=run_index, daemon=True) if target_type == MODE_S3 else None
+    index_thread = threading.Thread(target=run_index, daemon=True) if enable_index_build else None
     scan_thread = None
     scan_done_event = threading.Event()
 
@@ -2180,6 +2188,8 @@ def main():
                 and checker_scheduler.get_active_workers() == 0
                 and scheduler.get_active_workers() == 0
             )
+            if queues_finished and index_stop_event is not None and index_thread is not None and index_thread.is_alive():
+                index_stop_event.set()
             if queues_finished and index_finished:
                 set_status("check", "done")
                 return True
@@ -2194,6 +2204,8 @@ def main():
         interrupted = True
         logging.warning("用户手动停止任务")
     finally:
+        if index_stop_event is not None:
+            index_stop_event.set()
         if scan_thread is not None:
             scan_thread.join(timeout=5)
         if index_thread is not None:
