@@ -1,4 +1,3 @@
-# core/dashboard.py
 # -*- coding: utf-8 -*-
 """使用 Rich 渲染迁移任务的实时仪表盘。"""
 
@@ -10,20 +9,16 @@ from rich.console import Console, Group
 from rich.live import Live
 from rich.measure import Measurement
 from rich.panel import Panel
-from rich.progress import (
-    BarColumn,
-    Progress as RichProgress,
-    TextColumn,
-)
+from rich.progress import BarColumn, Progress as RichProgress, TextColumn
 from rich.table import Table
 from rich.text import Text
 
 
 # ================================
-# 渲染迁移仪表盘
+# 实时仪表盘
 # ================================
 class Dashboard:
-    """实时渲染传输进度、线程状态与队列指标。"""
+    """展示扫描、检查、传输与整体进度。"""
 
     # ================================
     # 初始化仪表盘
@@ -34,23 +29,25 @@ class Dashboard:
         task_queue,
         scheduler,
         scan_workers,
+        checker_queue=None,
+        checker_scheduler=None,
         enabled=True,
         force_terminal=False,
         status_provider=None,
         scan_controller=None,
     ):
-
         self.progress = progress
         self.task_queue = task_queue
         self.scheduler = scheduler
         self.scan_workers = scan_workers
+        self.checker_queue = checker_queue
+        self.checker_scheduler = checker_scheduler
         self.enabled = enabled
-        self.console = Console(
-            force_terminal=True,
-            file=sys.stdout,
-        )
+        self.console = Console(force_terminal=force_terminal, file=sys.stdout)
         self.status_provider = status_provider
         self.scan_controller = scan_controller
+        self.running = False
+
         self.progress_bar_column = BarColumn(
             bar_width=40,
             style="grey23",
@@ -77,27 +74,23 @@ class Dashboard:
             speed_detail="0.0B/s",
             eta_detail="--:--:--",
         )
-        self.running = False
 
     # ================================
     # 启动仪表盘
     # ================================
     def start(self):
-
         self.running = True
 
     # ================================
     # 停止仪表盘
     # ================================
     def stop(self):
-
         self.running = False
 
     # ================================
     # 构建指标表格
     # ================================
     def build_table(self):
-
         snapshot = self.progress.snapshot()
 
         done = snapshot["done_bytes"]
@@ -111,50 +104,101 @@ class Dashboard:
         cache_hit = snapshot["cache_hit"]
         cache_total = snapshot["cache_total"]
         scan_active_workers = snapshot["scan_active_workers"]
-        active_workers = self.scheduler.get_active_workers()
 
-        status = {}
-        if self.status_provider is not None:
-            status = self.status_provider()
+        upload_snapshot = (
+            self.scheduler.get_status_snapshot()
+            if hasattr(self.scheduler, "get_status_snapshot")
+            else {}
+        )
+        active_workers = int(upload_snapshot.get("active_workers", self.scheduler.get_active_workers()))
+        stalled_workers = int(upload_snapshot.get("stalled_workers", 0) or 0)
 
+        checker_active_workers = 0
+        checker_stalled_workers = 0
+        if self.checker_scheduler is not None:
+            checker_snapshot = (
+                self.checker_scheduler.get_status_snapshot()
+                if hasattr(self.checker_scheduler, "get_status_snapshot")
+                else {}
+            )
+            checker_active_workers = int(
+                checker_snapshot.get("active_workers", self.checker_scheduler.get_active_workers())
+            )
+            checker_stalled_workers = int(checker_snapshot.get("stalled_workers", 0) or 0)
+
+        status = self.status_provider() if self.status_provider is not None else {}
         index_status = status.get("index", "unknown")
         raw_scan_status = status.get("scan", "unknown")
+        raw_check_status = status.get("check", "unknown")
+
         scan_status = raw_scan_status
         scan_worker_display = str(self.scan_workers)
         target_scan_workers = None
-
         if self.scan_controller is not None:
             target_scan_workers = self.scan_controller.get_desired_workers()
             scan_worker_display = f"{target_scan_workers}/{self.scan_workers}"
 
-        if scan_status == "running":
+        if raw_scan_status == "running":
             if target_scan_workers is not None:
                 scan_status = f"running ({scan_active_workers} active, target {target_scan_workers})"
             else:
                 scan_status = f"running ({scan_active_workers} active)"
 
+        check_status = raw_check_status
+        if self.checker_scheduler is not None:
+            if checker_active_workers > 0:
+                suffix = f"{checker_active_workers} active"
+                if checker_stalled_workers > 0:
+                    suffix += f", {checker_stalled_workers} stalled"
+                check_status = f"running ({suffix})"
+            elif self.checker_queue is not None and self.checker_queue.unfinished_tasks > 0:
+                check_status = "queued"
+            elif raw_scan_status in {"pending", "running"}:
+                check_status = "waiting for scan"
+            elif raw_check_status in {"done", "n/a"}:
+                check_status = raw_check_status
+            else:
+                check_status = "done"
+
         if active_workers > 0:
-            upload_status = f"running ({active_workers} active)"
+            suffix = f"{active_workers} active"
+            if stalled_workers > 0:
+                suffix += f", {stalled_workers} stalled"
+            upload_status = f"running ({suffix})"
         elif self.task_queue.unfinished_tasks > 0:
             upload_status = "queued"
+        elif self.checker_scheduler is not None and (
+            check_status in {"queued", "waiting for scan"} or checker_active_workers > 0
+        ):
+            upload_status = "waiting for check"
         elif raw_scan_status in {"pending", "running"}:
             upload_status = "waiting for scan"
+        elif raw_scan_status in {"done", "n/a"} and (
+            self.checker_scheduler is None or raw_check_status in {"done", "n/a"}
+        ):
+            upload_status = "done"
         else:
             upload_status = "idle"
 
-        hit_rate = 0
-        if cache_total > 0:
-            hit_rate = cache_hit / cache_total * 100
-
+        hit_rate = (cache_hit / cache_total * 100.0) if cache_total > 0 else 0.0
         scan_elapsed = max(time.time() - snapshot["scan_start"], 0.001)
         scan_speed = scan_files / scan_elapsed
-
         elapsed = max(time.time() - snapshot["start_time"], 0.001)
         upload_speed = done / elapsed / 1024 / 1024
 
         queue_current = self.task_queue.qsize()
         queue_max = getattr(self.task_queue, "maxsize", 0)
         queue_display = str(queue_current) if queue_max <= 0 else f"{queue_current}/{queue_max}"
+
+        checker_queue_display = ""
+        if self.checker_queue is not None:
+            checker_current = self.checker_queue.qsize()
+            checker_max = getattr(self.checker_queue, "maxsize", 0)
+            checker_queue_display = (
+                str(checker_current)
+                if checker_max <= 0
+                else f"{checker_current}/{checker_max}"
+            )
 
         table = Table(
             box=box.SIMPLE_HEAVY,
@@ -172,6 +216,8 @@ class Dashboard:
         table.add_row("Scan Skip", str(scan_skip))
         table.add_row("Index Status", self.render_status(index_status))
         table.add_row("Scan Status", self.render_status(scan_status))
+        if self.checker_scheduler is not None:
+            table.add_row("Check Status", self.render_status(check_status))
         table.add_row("Upload Status", self.render_status(upload_status))
         table.add_row("Progress", f"{done / 1024 / 1024:.1f}MB / {total / 1024 / 1024:.1f}MB")
         table.add_row("Cache Hit", f"{cache_hit}/{cache_total}")
@@ -181,7 +227,11 @@ class Dashboard:
         table.add_row("Scan Errors", str(scan_errors))
         table.add_row("Upload Errors", str(upload_errors))
         table.add_row("Upload Speed", f"{upload_speed:.1f} MB/s")
+        if self.checker_queue is not None:
+            table.add_row("Check Queue", checker_queue_display)
         table.add_row("Queue Size", queue_display)
+        if self.checker_scheduler is not None:
+            table.add_row("Check Workers", str(len(self.checker_scheduler.threads)))
         table.add_row("Upload Workers", str(len(self.scheduler.threads)))
         table.add_row("Scan Workers", scan_worker_display)
 
@@ -191,7 +241,6 @@ class Dashboard:
     # 渲染状态颜色
     # ================================
     def render_status(self, value):
-
         text = str(value)
         lowered = text.lower()
 
@@ -201,7 +250,7 @@ class Dashboard:
             style = "bold yellow"
         elif lowered == "done":
             style = "bold bright_green"
-        elif lowered in {"queued", "waiting for scan"}:
+        elif lowered in {"queued", "waiting for scan", "waiting for check"}:
             style = "bold magenta"
         elif lowered == "pending":
             style = "bold cyan"
@@ -215,15 +264,12 @@ class Dashboard:
     # ================================
     @staticmethod
     def format_bytes(value):
-
         size = float(max(value or 0, 0))
         units = ["B", "KB", "MB", "GB", "TB", "PB"]
 
         for unit in units:
             if size < 1024 or unit == units[-1]:
-                if unit == "B":
-                    return f"{size:.0f}{unit}"
-                return f"{size:.1f}{unit}"
+                return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
             size /= 1024
 
         return "0B"
@@ -233,10 +279,8 @@ class Dashboard:
     # ================================
     @staticmethod
     def format_progress_pct(done, total):
-
         total_for_ratio = max(float(total or 0), float(done or 0), 1.0)
         percent = max(0.0, min(float(done or 0) / total_for_ratio * 100.0, 100.0))
-
         if percent < 1:
             return f"{percent:.2f}%"
         if percent < 10:
@@ -244,11 +288,10 @@ class Dashboard:
         return f"{percent:.0f}%"
 
     # ================================
-    # 格式化剩余时间
+    # 格式化 ETA
     # ================================
     @staticmethod
     def format_eta(seconds):
-
         if seconds is None or seconds < 0:
             return "--:--:--"
 
@@ -263,7 +306,6 @@ class Dashboard:
     # 构建进度条
     # ================================
     def build_progress_renderable(self, bar_width=None):
-
         snapshot = self.progress.snapshot()
         total = max(int(snapshot["total_bytes"] or 0), 0)
         done = max(int(snapshot["done_bytes"] or 0), 0)
@@ -274,7 +316,7 @@ class Dashboard:
         eta_seconds = (remaining / speed) if speed > 0 else None
 
         if bar_width is not None:
-            self.progress_bar_column.bar_width = max(24, min(40, int(bar_width)))
+            self.progress_bar_column.bar_width = max(20, min(40, int(bar_width)))
 
         self.progress_bar.update(
             self.progress_task_id,
@@ -291,24 +333,17 @@ class Dashboard:
     # 测量渲染宽度
     # ================================
     def measure_renderable_width(self, renderable):
-
-        measurement = Measurement.get(
-            self.console,
-            self.console.options,
-            renderable,
-        )
+        measurement = Measurement.get(self.console, self.console.options, renderable)
         return max(20, measurement.maximum)
 
     # ================================
     # 构建整体渲染对象
     # ================================
     def build_renderable(self):
-
         table = self.build_table()
         table_width = self.measure_renderable_width(table)
-
         content = Group(
-            self.build_progress_renderable(bar_width=max(24, table_width - 26)),
+            self.build_progress_renderable(bar_width=max(20, table_width - 26)),
             table,
         )
         return Panel(
@@ -323,7 +358,6 @@ class Dashboard:
     # 持续刷新直到结束
     # ================================
     def run_until(self, done_fn, poll_interval=0.2, start_fn=None):
-
         self.running = True
 
         if not self.enabled:
@@ -346,7 +380,6 @@ class Dashboard:
 
             while self.running:
                 live.update(self.build_renderable(), refresh=True)
-
                 sys.stdout.flush()
 
                 if done_fn():

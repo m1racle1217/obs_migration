@@ -1,5 +1,6 @@
 """测试迁移核心组件与命令行辅助逻辑。"""
 
+import configparser
 import csv
 import io
 import json
@@ -1163,6 +1164,93 @@ class EntryUiTests(unittest.TestCase):
     def test_prompt_config_action_supports_direct_index(self):
         with patch("builtins.input", side_effect=["7"]):
             self.assertEqual(obs_migrate._prompt_config_action({"7": ("SOURCE", "prefix")}), "7")
+
+    # ================================
+    # 验证顶层配置菜单为折叠视图
+    # ================================
+    def test_show_config_menu_displays_collapsed_groups(self):
+        cfg = configparser.ConfigParser()
+        for section, items in obs_migrate.DEFAULT_CONFIG.items():
+            cfg[section] = dict(items)
+
+        cfg.set("SOURCE", "type", "s3")
+        cfg.set("SOURCE", "bucket", "src-bucket")
+        cfg.set("SOURCE", "prefix", "src-prefix")
+        cfg.set("TARGET", "type", "local")
+        cfg.set("TARGET", "path", "/data/target")
+
+        with patch("sys.stdout", new=io.StringIO()) as buffer:
+            mapping = obs_migrate.show_config_menu(cfg)
+
+        output = buffer.getvalue()
+        self.assertEqual(mapping["1"], "source")
+        self.assertEqual(mapping["8"], "ui")
+        self.assertIn("配置菜单", output)
+        self.assertIn("[源端配置]", output)
+        self.assertIn("[目标端配置]", output)
+        self.assertIn("[调度器配置]", output)
+        self.assertNotIn("源端对象存储 AccessKey", output)
+        self.assertNotIn("目标端对象存储 Endpoint", output)
+
+    # ================================
+    # 验证配置展示会折叠当前模式无关项
+    # ================================
+    def test_show_config_collapses_inactive_mode_specific_options(self):
+        cfg = configparser.ConfigParser()
+        for section, items in obs_migrate.DEFAULT_CONFIG.items():
+            cfg[section] = dict(items)
+
+        cfg.set("SOURCE", "type", "s3")
+        cfg.set("TARGET", "type", "local")
+
+        with patch("sys.stdout", new=io.StringIO()) as buffer:
+            mapping = obs_migrate.show_config(cfg)
+
+        output = buffer.getvalue()
+        mapped_items = set(mapping.values())
+
+        self.assertIn("源端配置", output)
+        self.assertIn("目标端配置", output)
+        self.assertIn("当前模式：s3", output)
+        self.assertIn("当前模式：local", output)
+        self.assertIn(("SOURCE", "bucket"), mapped_items)
+        self.assertIn(("TARGET", "path"), mapped_items)
+        self.assertNotIn(("SOURCE", "path"), mapped_items)
+        self.assertNotIn(("TARGET", "endpoint"), mapped_items)
+
+    # ================================
+    # 验证分组详情展开后只显示该组配置项
+    # ================================
+    def test_show_config_group_only_expands_selected_group(self):
+        cfg = configparser.ConfigParser()
+        for section, items in obs_migrate.DEFAULT_CONFIG.items():
+            cfg[section] = dict(items)
+
+        with patch("sys.stdout", new=io.StringIO()) as buffer:
+            mapping = obs_migrate.show_config_group(cfg, "scanner")
+
+        output = buffer.getvalue()
+        mapped_items = set(mapping.values())
+
+        self.assertIn("扫描器配置", output)
+        self.assertIn(("SCAN", "scan_workers"), mapped_items)
+        self.assertIn(("SCAN", "batch_size"), mapped_items)
+        self.assertNotIn(("UPLOAD", "workers"), mapped_items)
+        self.assertNotIn("源端对象存储 AccessKey", output)
+
+    # ================================
+    # 验证折叠菜单支持直接启动
+    # ================================
+    def test_run_config_menu_can_start_directly(self):
+        cfg = configparser.ConfigParser()
+        for section, items in obs_migrate.DEFAULT_CONFIG.items():
+            cfg[section] = dict(items)
+
+        with patch("builtins.input", side_effect=["y"]), \
+                patch("sys.stdout", new=io.StringIO()):
+            result = obs_migrate.run_config_menu(cfg)
+
+        self.assertIs(result, cfg)
 
     # ================================
     # 验证根据端点识别存储协议
