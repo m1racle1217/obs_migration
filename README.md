@@ -23,7 +23,7 @@
 - 🧭 **多模式迁移**：支持本地与对象存储之间双向迁移，也支持对象存储互转
 - 🧩 **三段流水线**：`扫描 -> 检查 -> 传输` 解耦，吞吐和稳定性更好
 - 🚀 **高吞吐传输**：并发传输、分片上传、服务端拷贝、单文件分片并发都已支持
-- 🧠 **智能存在性判断**：支持 `auto / hybrid / head_only` 多种比较策略
+- 🧠 **智能存在性判断**：支持 `auto / hybrid / index_only / head_only` 多种比较策略
 - 🛡️ **传后校验**：支持 `none / size / etag / head`
 - 🌈 **实时仪表盘**：进度条、百分比、速率、ETA、检查阶段、卡死探测一屏可见
 - 📄 **报告完整**：成功、跳过、失败、中断、未完成任务都会落到报告
@@ -353,69 +353,36 @@ language = zh
 
 ---
 
-## 🌰 典型配置示例
 ## 🧠 比较策略与传后校验
 
-### 1. 本地目录上传到 OBS
 这部分很重要，尤其是你需要在“性能”和“严格确认”之间做取舍时。
 
-```ini
-[SOURCE]
-type = local
-path = /data/source
 ### `target_compare_mode`
 
-[TARGET]
-type = s3
-endpoint = obs.cn-south-1.myhuaweicloud.com
-bucket = your-bucket
-prefix = backup/
-```
 #### `auto`
-
-### 2. OBS 下载到本地
 - 默认模式
 - 本地单文件场景会自动偏向 `head_only`
-- 其他大多数场景会自动落到 `hybrid`
+- 目标端为对象存储且索引已完成时，大多数场景会自动落到 `hybrid`
 
-```ini
-[SOURCE]
-type = s3
-endpoint = obs.cn-south-1.myhuaweicloud.com
-bucket = your-bucket
-prefix = backup/
 #### `hybrid`
-
-[TARGET]
-type = local
-path = /data/restore
-```
 - 优先利用目标端索引做快速判断
-- 对索引命中、差异对象、严格场景再补 `HEAD`
-- 适合海量小文件，吞吐更好
+- 索引未命中时，通常不再额外发 `HEAD`
+- 索引命中时，会再补一次 `HEAD`
+- 适合想兼顾吞吐与谨慎确认的场景
 
-### 3. 对象存储到对象存储
+#### `index_only`
+- 优先利用目标端索引做快速判断
+- 索引命中且 `size` 一致时，直接按索引跳过，不再补 `HEAD`
+- 索引未命中时，直接进入传输
+- 适合目标端前缀稳定、重跑较多、希望尽量减少重复请求的场景
+
 #### `head_only`
-
-```ini
-[SOURCE]
-type = s3
-endpoint = obs.cn-south-1.myhuaweicloud.com
-bucket = source-bucket
-prefix = source/
 - 每个对象都尽量走 `HEAD`
 - 一致性确认最直接，但请求量更大
 - 适合对“外部并发写入目标前缀”比较敏感的场景
 
-[TARGET]
-type = s3
-endpoint = obs.cn-south-1.myhuaweicloud.com
-bucket = target-bucket
-prefix = target/
-```
 ### `verify_after_upload`
 
----
 #### `none`
 
 ## 🌈 运行界面与体验优化
@@ -638,6 +605,7 @@ python obs_migrate.py
 ```
 - 更推荐 `target_compare_mode = hybrid`
 - 结合目标端索引可以显著减少不必要的 `HEAD`
+- 如果目标端前缀稳定、重跑较多、主要是跳过已存在对象，更推荐 `target_compare_mode = index_only`
 - 如果对目标端外部写入特别敏感，再切到 `head_only`
 
 ### 4. 推荐的 Git 策略

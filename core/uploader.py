@@ -600,11 +600,14 @@ class OBSUploader:
             else:
                 self.progress.cache_miss_inc()
 
-        need_head = (
-            compare_mode == "head_only"
-            or not index_ready
-            or (index_row is not None and (self.enable_head_check or compare_mode == "hybrid"))
-        )
+        if compare_mode == "index_only":
+            need_head = not index_ready
+        else:
+            need_head = (
+                compare_mode == "head_only"
+                or not index_ready
+                or (index_row is not None and (self.enable_head_check or compare_mode == "hybrid"))
+            )
 
         if index_row and int(index_row[0] or 0) == int(size) and not need_head:
             self.progress.skip()
@@ -1350,7 +1353,7 @@ class OBSUploader:
             if _target_type != TARGET_TYPE_S3:
                 return "head_only"
             return "hybrid" if getattr(self.checkpoint, "obs_index_ready", False) else "head_only"
-        if mode in {"hybrid", "head_only"}:
+        if mode in {"hybrid", "head_only", "index_only"}:
             return mode
         return "hybrid"
 

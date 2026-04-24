@@ -1011,6 +1011,83 @@ class UploaderTests(unittest.TestCase):
             checkpoint.close()
 
     # ================================
+    # 验证 index_only 命中索引时直接跳过 HEAD
+    # ================================
+    def test_uploader_index_only_skips_head_when_index_hits_target_key(self):
+        # ================================
+        # 模拟目标端上传客户端
+        # ================================
+        class FakeTargetClient:
+            # ================================
+            # 初始化目标端统计字段
+            # ================================
+            def __init__(self):
+                self.head_calls = 0
+                self.put_calls = 0
+
+            # ================================
+            # 模拟目标端 HEAD 请求
+            # ================================
+            def getObjectMetadata(self, bucket, key):
+                self.head_calls += 1
+                return SimpleNamespace(status=200, body=SimpleNamespace(contentLength=7, etag="etag-a"))
+
+            # ================================
+            # 模拟直接上传文件
+            # ================================
+            def putFile(self, bucket, key, local_path):
+                self.put_calls += 1
+                return SimpleNamespace(status=200)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local_file = root / "payload.txt"
+            local_file.write_text("payload", encoding="utf-8")
+
+            progress = Progress()
+            checkpoint = Checkpoint(str(root / "state" / "tasks.db"))
+            checkpoint.reset_obs_index()
+            checkpoint.upsert_obs_many([("backup/payload.txt", local_file.stat().st_size, "etag-a")])
+            checkpoint.set_index_ready()
+            fake_target = FakeTargetClient()
+
+            uploader = OBSUploader(
+                progress,
+                checkpoint,
+                failed_dir=str(root / "failed"),
+                retry_limit=2,
+                compare_mode="index_only",
+                enable_head_check=True,
+            )
+
+            with patch.object(uploader_module, "_target_type", "s3"), \
+                    patch.object(uploader_module, "_client", fake_target), \
+                    patch.object(uploader_module, "_bucket", "dst-bucket"), \
+                    patch.object(uploader_module, "_target_prefix", "backup"), \
+                    patch.object(uploader_module, "_threshold", 1024 * 1024), \
+                    patch.object(uploader_module, "_part_size", 1024 * 1024), \
+                    patch.object(uploader_module, "_limiter", None):
+                uploader.upload(
+                    {
+                        "source_type": "local",
+                        "local": str(local_file),
+                        "source_path": str(local_file),
+                        "relative_path": "payload.txt",
+                        "size": local_file.stat().st_size,
+                    }
+                )
+
+            self.assertEqual(fake_target.head_calls, 0)
+            self.assertEqual(fake_target.put_calls, 0)
+
+            snapshot = progress.snapshot()
+            self.assertEqual(snapshot["files_done"], 1)
+            self.assertEqual(snapshot["files_skip"], 1)
+            self.assertEqual(snapshot["done_bytes"], len("payload"))
+
+            checkpoint.close()
+
+    # ================================
     # 验证本地到本地复制
     # ================================
     def test_uploader_copies_local_source_to_local_target(self):

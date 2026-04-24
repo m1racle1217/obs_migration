@@ -124,7 +124,7 @@ CONFIG_DESC = {
     "CHECK.enable_etag_check": "上传前是否启用 ETAG 比对",
     "CHECK.enable_head_check": "上传前是否启用 HEAD 校验",
     "CHECK.strict_client_check": "客户端未初始化时是否直接报错退出",
-    "CHECK.target_compare_mode": "目标端比较模式：auto / hybrid / head_only",
+    "CHECK.target_compare_mode": "目标端比较模式：auto / hybrid / index_only / head_only",
     "CHECK.verify_after_upload": "传输后校验模式：none / size / etag / head",
     "PATH.log_dir": "日志目录（相对配置文件目录解析）",
     "PATH.state_dir": "断点数据库目录（tasks.db 会写到这里）",

@@ -5,6 +5,7 @@ import logging
 import queue
 import threading
 from contextlib import nullcontext
+from collections import deque
 
 try:
     from obs import ObsClient
@@ -33,6 +34,7 @@ def _list_objects(
     bucket,
     current_prefix,
     marker,
+    delimiter=None,
     low_level_retries=3,
     low_level_retry_sleep=0.5,
     governor=None,
@@ -44,14 +46,17 @@ def _list_objects(
     }
 
     def do_list():
-        try:
-            return client.listObjects(
-                bucket,
-                delimiter="/",
-                **kwargs,
-            )
-        except TypeError:
-            return client.listObjects(bucket, **kwargs)
+        if delimiter is not None:
+            try:
+                return client.listObjects(
+                    bucket,
+                    delimiter=delimiter,
+                    **kwargs,
+                )
+            except TypeError:
+                return client.listObjects(bucket, **kwargs)
+
+        return client.listObjects(bucket, **kwargs)
 
     def governed_call():
         connection_context = governor.connection_slot() if governor is not None else nullcontext()
@@ -67,6 +72,25 @@ def _list_objects(
         operation=f"indexList:{current_prefix or '/'}",
         logger=logging.getLogger(__name__),
     )
+
+
+# ================================
+# 提取对象索引行
+# ================================
+def _extract_rows(body):
+    rows = []
+    for obj in getattr(body, "contents", []) or []:
+        key = sanitize_key(normalize_obs_key(getattr(obj, "key", "") or "")).strip("/")
+        if not key:
+            continue
+        rows.append(
+            (
+                key,
+                int(getattr(obj, "size", 0) or 0),
+                getattr(obj, "etag", None),
+            )
+        )
+    return rows
 
 
 # ================================
@@ -105,6 +129,7 @@ def build_obs_index(
     seen_prefixes = set()
     first_error = [None]
     inner_stop_event = threading.Event()
+    shard_target = max(worker_count * 4, 16)
 
     logging.info(
         "[OBS_INDEX] start build index prefix=%s workers=%s",
@@ -113,21 +138,77 @@ def build_obs_index(
     )
 
     # ================================
-    # 去重入队前缀
+    # 去重前缀
     # ================================
-    def enqueue_prefix(current_prefix):
+    def mark_prefix(current_prefix):
         normalized = sanitize_key(normalize_obs_key(current_prefix or ""))
         with seen_lock:
             if normalized in seen_prefixes:
-                return
+                return None
             seen_prefixes.add(normalized)
-        prefix_queue.put(normalized)
+        return normalized
 
     # ================================
-    # 索引单个前缀
+    # 写入一批索引行
     # ================================
-    def scan_prefix(client, current_prefix):
+    def save_rows(rows):
         nonlocal total
+        if not rows:
+            return
+
+        checkpoint.upsert_obs_many(rows)
+        with total_lock:
+            total += len(rows)
+            if total and total % 100000 == 0:
+                logging.info("[OBS_INDEX] cached %s objects", total)
+
+    # ================================
+    # 仅按当前层级发现子前缀
+    # ================================
+    def expand_prefix(client, current_prefix):
+        child_prefixes = []
+        marker = None
+
+        while not inner_stop_event.is_set():
+            if stop_event is not None and stop_event.is_set():
+                inner_stop_event.set()
+                return child_prefixes
+            response = _list_objects(
+                client,
+                bucket,
+                current_prefix,
+                marker,
+                delimiter="/",
+                low_level_retries=low_level_retries,
+                low_level_retry_sleep=low_level_retry_sleep,
+                governor=governor,
+            )
+
+            if response.status >= 300:
+                raise RuntimeError(f"OBS list error {response.status}")
+
+            body = getattr(response, "body", None)
+            if body is None:
+                return child_prefixes
+
+            for child_prefix in _extract_common_prefixes(body):
+                normalized = mark_prefix(child_prefix)
+                if normalized is not None:
+                    child_prefixes.append(normalized)
+
+            save_rows(_extract_rows(body))
+
+            if not getattr(body, "is_truncated", False):
+                return child_prefixes
+
+            marker = getattr(body, "next_marker", None)
+
+        return child_prefixes
+
+    # ================================
+    # 平铺扫描单个分片前缀
+    # ================================
+    def scan_prefix_flat(client, current_prefix):
         marker = None
 
         while not inner_stop_event.is_set():
@@ -140,6 +221,7 @@ def build_obs_index(
                 bucket,
                 current_prefix,
                 marker,
+                delimiter=None,
                 low_level_retries=low_level_retries,
                 low_level_retry_sleep=low_level_retry_sleep,
                 governor=governor,
@@ -150,35 +232,43 @@ def build_obs_index(
 
             body = getattr(response, "body", None)
             if body is None:
-                break
+                return
 
-            for child_prefix in _extract_common_prefixes(body):
-                enqueue_prefix(child_prefix)
-
-            rows = []
-            for obj in getattr(body, "contents", []) or []:
-                key = sanitize_key(normalize_obs_key(getattr(obj, "key", "") or "")).strip("/")
-                if not key:
-                    continue
-                rows.append(
-                    (
-                        key,
-                        int(getattr(obj, "size", 0) or 0),
-                        getattr(obj, "etag", None),
-                    )
-                )
-
-            checkpoint.upsert_obs_many(rows)
-
-            with total_lock:
-                total += len(rows)
-                if total and total % 10000 == 0:
-                    logging.info("[OBS_INDEX] cached %s objects", total)
+            save_rows(_extract_rows(body))
 
             if not getattr(body, "is_truncated", False):
-                break
+                return
 
             marker = getattr(body, "next_marker", None)
+
+    # ================================
+    # 发现适合并发的分片前缀
+    # ================================
+    def discover_frontier(client):
+        frontier = deque()
+        root = mark_prefix(root_prefix)
+        frontier.append(root_prefix if root is None else root)
+        expanded = 0
+
+        while frontier and len(frontier) < shard_target and not inner_stop_event.is_set():
+            if stop_event is not None and stop_event.is_set():
+                inner_stop_event.set()
+                break
+
+            current_prefix = frontier.popleft()
+            child_prefixes = expand_prefix(client, current_prefix)
+            expanded += 1
+
+            if child_prefixes:
+                frontier.extend(child_prefixes)
+
+        logging.info(
+            "[OBS_INDEX] frontier=%s expanded_prefixes=%s shard_target=%s",
+            len(frontier),
+            expanded,
+            shard_target,
+        )
+        return list(frontier)
 
     # ================================
     # worker 主循环
@@ -192,19 +282,33 @@ def build_obs_index(
                     return
                 if inner_stop_event.is_set():
                     continue
-                scan_prefix(client, current_prefix)
+                scan_prefix_flat(client, current_prefix)
             except Exception as exc:
                 inner_stop_event.set()
                 with error_lock:
                     if first_error[0] is None:
                         first_error[0] = exc
-                logging.exception("[OBS_INDEX][PREFIX_ERROR] prefix=%s", current_prefix)
+                logging.exception("[OBS_INDEX][SHARD_ERROR] prefix=%s", current_prefix)
             finally:
                 prefix_queue.task_done()
 
-    enqueue_prefix(root_prefix)
+    discovery_client = create_client()
+    shard_prefixes = discover_frontier(discovery_client)
+    if first_error[0] is not None:
+        checkpoint.flush_obs_index()
+        raise first_error[0]
+
+    if inner_stop_event.is_set() and (stop_event is None or stop_event.is_set()):
+        checkpoint.flush_obs_index()
+        logging.warning("[OBS_INDEX] stopped before shard scanning total=%s", total)
+        return False
+
+    for current_prefix in shard_prefixes:
+        prefix_queue.put(current_prefix)
+
     threads = []
-    for _ in range(worker_count):
+    actual_workers = max(1, min(worker_count, max(len(shard_prefixes), 1)))
+    for _ in range(actual_workers):
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()
         threads.append(thread)
@@ -217,7 +321,7 @@ def build_obs_index(
             completed = False
         if inner_stop_event.is_set() and first_error[0] is None:
             completed = False
-        for _ in range(worker_count):
+        for _ in range(actual_workers):
             prefix_queue.put(stop_token)
         for thread in threads:
             thread.join()
