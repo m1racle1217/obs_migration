@@ -273,7 +273,7 @@ language = zh
 ## 🧾 关键参数说明
 
 - `type`：源端类型，支持 `local` / `s3`
-- `path`：源端为本地时使用
+- `path`：源端为本地时使用，支持目录、单文件、通配符，例如 `/data/attachments/202604*`
 - `ak/sk/endpoint/bucket/prefix`：源端为对象存储时使用
 ### `[SOURCE]` / `[TARGET]`
 
@@ -282,6 +282,8 @@ language = zh
 - `path`：本地模式使用
 - `ak / sk / endpoint / bucket / prefix`：对象存储模式使用
 - `prefix` 可以为空；程序会自动做前缀拼接和清洗
+- 如果源端本地路径使用通配符，目标端会**保留第一个通配符之前的静态目录层级**作为相对根目录  
+  例如：源端 `/nfs2/qyk/qyfile/data/attachments/202604*`，目标前缀 `bak/xtbak/`，则会写成 `bak/xtbak/20260401/...`
 
 - `type`：目标端类型，支持 `local` / `s3`
 - `path`：目标端为本地时使用

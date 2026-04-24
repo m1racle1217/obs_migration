@@ -3,9 +3,11 @@
 """提供 OBS / S3 兼容对象存储迁移工具的命令行入口。"""
 
 import configparser
+import glob
 import logging
 import os
 import queue
+import re
 import shutil
 import sys
 import threading
@@ -58,7 +60,7 @@ from core import (
     TaskTransfer,
     init_source_client,
     init_target,
-    scan_directory,
+    scan_local_sources,
     scan_s3_objects,
 )
 from core.obs_index import build_obs_index
@@ -89,7 +91,7 @@ SENSITIVE_FIELDS = {
 
 CONFIG_DESC = {
     "SOURCE.type": "源端模式：local 或 s3",
-    "SOURCE.path": "源端本地目录或单文件路径（source.type=local 时使用）",
+    "SOURCE.path": "源端本地目录、单文件路径或通配符（source.type=local 时使用，例如 /data/202604*）",
     "SOURCE.ak": "源端对象存储 AccessKey（source.type=s3 时使用）",
     "SOURCE.sk": "源端对象存储 SecretKey（source.type=s3 时使用）",
     "SOURCE.endpoint": "源端对象存储 Endpoint（source.type=s3 时使用，支持 OBS / 其他 S3 兼容服务）",
@@ -1187,6 +1189,133 @@ def _source_label(source_type, source_path, source_bucket, source_prefix):
 
 
 # ================================
+# 判断本地路径是否包含通配符
+# ================================
+def _has_local_glob(path_value):
+    return glob.has_magic(str(path_value or ""))
+
+
+# ================================
+# 解析本地通配符的静态根目录
+# ================================
+def _local_glob_static_root(path_value):
+    text = str(path_value or "").strip()
+    if not text:
+        return "."
+
+    drive, tail = os.path.splitdrive(text)
+    split_chars = re.escape(os.sep + (os.altsep or ""))
+    parts = [item for item in re.split(f"[{split_chars}]+", tail) if item]
+    static_parts = []
+
+    for part in parts:
+        if glob.has_magic(part):
+            break
+        static_parts.append(part)
+
+    is_abs = os.path.isabs(text)
+    if not static_parts:
+        if is_abs:
+            if drive:
+                return os.path.normpath(drive + os.sep)
+            return os.path.normpath(os.sep)
+        return "."
+
+    prefix = os.path.join(*static_parts)
+    if is_abs:
+        if drive:
+            return os.path.normpath(os.path.join(drive + os.sep, prefix))
+        return os.path.normpath(os.path.join(os.sep, prefix))
+
+    if drive:
+        return os.path.normpath(os.path.join(drive, prefix))
+
+    return os.path.normpath(prefix)
+
+
+# ================================
+# 判断子路径是否落在父路径下
+# ================================
+def _is_sub_path(child_path, parent_path):
+    try:
+        return os.path.commonpath([child_path, parent_path]) == parent_path
+    except Exception:
+        return False
+
+
+# ================================
+# 构建本地源扫描计划
+# ================================
+def build_local_source_plan(source_path):
+    source_path = (source_path or "").strip()
+    has_glob = _has_local_glob(source_path)
+
+    if not has_glob:
+        if os.path.isdir(source_path):
+            return {
+                "pattern": source_path,
+                "has_glob": False,
+                "base_dir": source_path,
+                "match_count": 1,
+                "entries": [
+                    {
+                        "type": "dir",
+                        "path": source_path,
+                        "base_dir": source_path,
+                    }
+                ],
+            }
+
+        return {
+            "pattern": source_path,
+            "has_glob": False,
+            "base_dir": os.path.dirname(source_path) or ".",
+            "match_count": 1,
+            "entries": [
+                {
+                    "type": "file",
+                    "path": source_path,
+                    "base_dir": os.path.dirname(source_path) or ".",
+                }
+            ],
+        }
+
+    base_dir = _local_glob_static_root(source_path)
+    raw_matches = glob.glob(source_path, recursive=True)
+    dedup = {}
+    for matched in sorted(raw_matches):
+        abs_key = os.path.normcase(os.path.abspath(matched))
+        if abs_key not in dedup:
+            dedup[abs_key] = matched
+
+    pruned_entries = []
+    kept_dirs = []
+    for abs_key in sorted(dedup, key=lambda item: (len(item), item)):
+        matched_path = dedup[abs_key]
+        if any(_is_sub_path(abs_key, parent_dir) for parent_dir in kept_dirs):
+            continue
+
+        entry_type = "dir" if os.path.isdir(matched_path) else "file"
+        pruned_entries.append(
+            {
+                "type": entry_type,
+                "path": matched_path,
+                "base_dir": base_dir,
+            }
+        )
+        if entry_type == "dir":
+            kept_dirs.append(abs_key)
+
+    return {
+        "pattern": source_path,
+        "has_glob": True,
+        "base_dir": base_dir,
+        "match_count": len(pruned_entries),
+        "entries": pruned_entries,
+    }
+
+
+# ================================
 # 清洗名称用于文件命名
 # ================================
 def _sanitize_name(name):
@@ -1470,7 +1599,16 @@ def validate_config(cfg):
         sys.exit(1)
 
     if source_type == MODE_LOCAL:
-        if not source_path or not os.path.exists(source_path):
+        if not source_path:
+            print("❌ SOURCE.path 未配置")
+            sys.exit(1)
+
+        if _has_local_glob(source_path):
+            source_plan = build_local_source_plan(source_path)
+            if not source_plan["entries"]:
+                print("❌ SOURCE.path 通配符未匹配到任何本地文件或目录")
+                sys.exit(1)
+        elif not os.path.exists(source_path):
             print("❌ SOURCE.path 不存在")
             sys.exit(1)
     else:
@@ -1589,6 +1727,7 @@ def _legacy_main():
     target_prefix = sanitize_key(cfg.get(TARGET_SECTION, "prefix", fallback="")).strip("/")
 
     source_label = _source_label(source_type, source_path, source_bucket, source_prefix)
+    local_source_plan = build_local_source_plan(source_path) if source_type == MODE_LOCAL else None
 
     workers = cfg.getint("UPLOAD", "workers")
     retry_limit = cfg.getint("UPLOAD", "retry")
@@ -1614,6 +1753,13 @@ def _legacy_main():
     log_file = build_log_file(log_dir, source_label)
     setup_logger(log_file)
     logging.getLogger().propagate = False
+    if local_source_plan is not None and local_source_plan["has_glob"]:
+        logging.info(
+            "[SOURCE_GLOB] pattern=%s preserve_root=%s matched_entries=%s",
+            source_path,
+            local_source_plan["base_dir"],
+            local_source_plan["match_count"],
+        )
 
     if scan_workers != requested_scan_workers:
         if source_type == MODE_LOCAL:
@@ -1635,7 +1781,13 @@ def _legacy_main():
     checkpoint = Checkpoint(db_path)
     checkpoint.reset_obs_index()
 
-    is_local_single_file = source_type == MODE_LOCAL and os.path.isfile(source_path)
+    is_local_single_file = (
+        source_type == MODE_LOCAL
+        and local_source_plan is not None
+        and not local_source_plan["has_glob"]
+        and len(local_source_plan["entries"]) == 1
+        and local_source_plan["entries"][0]["type"] == "file"
+    )
     progress = Progress()
     task_queue = queue.Queue(maxsize=cfg.getint("SCAN", "queue_size"))
     scan_controller = None
@@ -1751,18 +1903,20 @@ def _legacy_main():
             index_thread.start()
 
         if is_local_single_file:
-            st = os.stat(source_path)
-            filename = os.path.basename(source_path)
+            single_entry = local_source_plan["entries"][0]
+            single_path = single_entry["path"]
+            st = os.stat(single_path)
+            filename = os.path.basename(single_path)
             if hasattr(reporter, "track_task"):
                 reporter.track_task(
-                    source_path,
+                    single_path,
                     size=st.st_size,
                 )
             task_queue.put(
                 {
                     "source_type": MODE_LOCAL,
-                    "local": source_path,
-                    "source_path": source_path,
+                    "local": single_path,
+                    "source_path": single_path,
                     "relative_path": filename,
                     "size": st.st_size,
                     "mtime": st.st_mtime,
@@ -1779,8 +1933,8 @@ def _legacy_main():
             def run_local_scan():
                 set_status("scan", "running")
                 try:
-                    scan_directory(
-                        source_path,
+                    scan_local_sources(
+                        local_source_plan["entries"],
                         task_queue,
                         progress,
                         checkpoint,
@@ -1894,6 +2048,7 @@ def main():
     target_prefix = sanitize_key(cfg.get(TARGET_SECTION, "prefix", fallback="")).strip("/")
 
     source_label = _source_label(source_type, source_path, source_bucket, source_prefix)
+    local_source_plan = build_local_source_plan(source_path) if source_type == MODE_LOCAL else None
 
     workers = cfg.getint("UPLOAD", "workers")
     checker_workers = cfg.getint("UPLOAD", "checkers", fallback=max(1, workers // 2))
@@ -1930,6 +2085,13 @@ def main():
     log_file = build_log_file(log_dir, source_label)
     setup_logger(log_file)
     logging.getLogger().propagate = False
+    if local_source_plan is not None and local_source_plan["has_glob"]:
+        logging.info(
+            "[SOURCE_GLOB] pattern=%s preserve_root=%s matched_entries=%s",
+            source_path,
+            local_source_plan["base_dir"],
+            local_source_plan["match_count"],
+        )
 
     if scan_workers != requested_scan_workers:
         if source_type == MODE_LOCAL:
@@ -1958,7 +2120,13 @@ def main():
         print(f"✓ 启动预处理完成，用时 {startup_prepare_cost:.1f}s")
     logging.info("[STARTUP] checkpoint/index prepare cost=%.2fs", startup_prepare_cost)
 
-    is_local_single_file = source_type == MODE_LOCAL and os.path.isfile(source_path)
+    is_local_single_file = (
+        source_type == MODE_LOCAL
+        and local_source_plan is not None
+        and not local_source_plan["has_glob"]
+        and len(local_source_plan["entries"]) == 1
+        and local_source_plan["entries"][0]["type"] == "file"
+    )
     progress = Progress()
     check_queue = queue.Queue(maxsize=cfg.getint("SCAN", "queue_size"))
     task_queue = queue.Queue(maxsize=cfg.getint("SCAN", "queue_size"))
@@ -2118,15 +2286,17 @@ def main():
             index_thread.start()
 
         if is_local_single_file:
-            stat_result = os.stat(source_path)
-            filename = os.path.basename(source_path)
+            single_entry = local_source_plan["entries"][0]
+            single_path = single_entry["path"]
+            stat_result = os.stat(single_path)
+            filename = os.path.basename(single_path)
             if hasattr(reporter, "track_task"):
-                reporter.track_task(source_path, size=stat_result.st_size)
+                reporter.track_task(single_path, size=stat_result.st_size)
             check_queue.put(
                 {
                     "source_type": MODE_LOCAL,
-                    "local": source_path,
-                    "source_path": source_path,
+                    "local": single_path,
+                    "source_path": single_path,
                     "relative_path": filename,
                     "size": stat_result.st_size,
                     "mtime": stat_result.st_mtime,
@@ -2141,8 +2311,8 @@ def main():
             def run_local_scan():
                 set_status("scan", "running")
                 try:
-                    scan_directory(
-                        source_path,
+                    scan_local_sources(
+                        local_source_plan["entries"],
                         check_queue,
                         progress,
                         checkpoint,

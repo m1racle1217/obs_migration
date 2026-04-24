@@ -11,7 +11,7 @@ from .ratelimiter import RateLimiter
 from .report import Reporter
 from .s3_scanner import scan_s3_objects
 from .scan_control import AdaptiveScanController
-from .scanner import scan_directory
+from .scanner import scan_directory, scan_local_sources
 from .scheduler import Scheduler
 from .uploader import (
     OBSUploader,
@@ -33,6 +33,7 @@ from .utils import (
 
 __all__ = [
     "scan_directory",
+    "scan_local_sources",
     "scan_s3_objects",
     "Scheduler",
     "OBSUploader",

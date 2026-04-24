@@ -25,7 +25,7 @@ from core.progress import Progress
 from core.report import Reporter
 from core.scan_control import AdaptiveScanController
 from core.s3_scanner import scan_s3_objects
-from core.scanner import scan_directory
+from core.scanner import scan_directory, scan_local_sources
 from core.uploader import OBSUploader
 from core.utils import build_object_uri, detect_storage_scheme
 
@@ -319,6 +319,73 @@ class ScannerTests(unittest.TestCase):
                     str(root / "file.txt"),
                     str(root / "sub" / "nested.bin"),
                 ]),
+            )
+
+    # ================================
+    # 验证本地通配符会保留静态根目录
+    # ================================
+    def test_build_local_source_plan_preserves_static_root_for_glob(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            attachments = root / "attachments"
+            (attachments / "20260401").mkdir(parents=True)
+            (attachments / "20260402").mkdir(parents=True)
+
+            pattern = str(attachments / "202604*")
+            plan = obs_migrate.build_local_source_plan(pattern)
+
+            self.assertTrue(plan["has_glob"])
+            self.assertEqual(
+                os.path.normpath(plan["base_dir"]),
+                os.path.normpath(str(attachments)),
+            )
+            self.assertEqual(plan["match_count"], 2)
+            self.assertEqual(
+                sorted((item["type"], os.path.normpath(item["path"])) for item in plan["entries"]),
+                [
+                    ("dir", os.path.normpath(str(attachments / "20260401"))),
+                    ("dir", os.path.normpath(str(attachments / "20260402"))),
+                ],
+            )
+
+    # ================================
+    # 验证多本地源扫描会保留匹配目录名
+    # ================================
+    def test_scan_local_sources_preserve_glob_matched_root_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            attachments = root / "attachments"
+            first_dir = attachments / "20260401"
+            second_dir = attachments / "20260402"
+            first_dir.mkdir(parents=True)
+            second_dir.mkdir(parents=True)
+            (first_dir / "a.txt").write_text("a", encoding="utf-8")
+            (second_dir / "b.txt").write_text("bb", encoding="utf-8")
+
+            reporter = MemoryReporter()
+            progress = Progress()
+            task_queue = queue.Queue()
+
+            scan_local_sources(
+                [
+                    {"type": "dir", "path": str(first_dir), "base_dir": str(attachments)},
+                    {"type": "dir", "path": str(second_dir), "base_dir": str(attachments)},
+                ],
+                task_queue,
+                progress,
+                checkpoint=None,
+                reporter=reporter,
+                scan_workers=2,
+            )
+
+            tasks = []
+            while not task_queue.empty():
+                tasks.append(task_queue.get_nowait())
+
+            self.assertEqual(len(tasks), 2)
+            self.assertEqual(
+                sorted(task["relative_path"] for task in tasks),
+                ["20260401/a.txt", "20260402/b.txt"],
             )
 
     # ================================
