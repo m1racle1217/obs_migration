@@ -628,7 +628,9 @@ class OBSUploader:
                     if remote_size != int(size):
                         head_status = "EXIST_DIFF"
                     else:
-                        candidate_etag = source_etag or self._resolve_local_etag(local_path_bytes, size)
+                        candidate_etag = source_etag
+                        if candidate_etag is None and self.enable_etag_check:
+                            candidate_etag = self._resolve_local_etag(local_path_bytes, size)
                         if self._can_compare_with_simple_etag(candidate_etag, remote_etag):
                             if self._normalize_etag(candidate_etag) == remote_etag:
                                 head_status = "EXIST_SAME"
@@ -684,7 +686,9 @@ class OBSUploader:
             if int(target_size) != int(size):
                 target_status = "EXIST_DIFF"
             else:
-                candidate_etag = source_etag or self._resolve_local_etag(local_path_bytes, size)
+                candidate_etag = source_etag
+                if candidate_etag is None and self.enable_etag_check:
+                    candidate_etag = self._resolve_local_etag(local_path_bytes, size)
                 if self._can_compare_with_local_file(candidate_etag, target_path, size):
                     target_hash = calc_file_md5(target_path)
                     if self._normalize_etag(candidate_etag) == target_hash:
@@ -736,6 +740,7 @@ class OBSUploader:
     def _put_local_file_to_s3(self, local_path_bytes, target_key, size, heartbeat=None):
         local_path = fix_windows_path(os.fsdecode(local_path_bytes))
         threshold = max(int(_threshold or 0), 0)
+        progress_callback = self._make_progress_callback(heartbeat=heartbeat, detail="upload")
 
         if size >= threshold:
             return self._call_target(
@@ -746,13 +751,19 @@ class OBSUploader:
                     partSize=max(int(_part_size or 0), 1),
                     taskNum=self.multipart_concurrency,
                     enableCheckpoint=True,
+                    progressCallback=progress_callback,
                 ),
                 operation=f"uploadFile:{target_key}",
                 heartbeat=heartbeat,
             )
 
         return self._call_target(
-            lambda: _client.putFile(_bucket, target_key, local_path),
+            lambda: _client.putFile(
+                _bucket,
+                target_key,
+                local_path,
+                progressCallback=progress_callback,
+            ),
             operation=f"putFile:{target_key}",
             heartbeat=heartbeat,
         )
@@ -808,10 +819,17 @@ class OBSUploader:
 
         def do_put_content():
             stream = None
+            progress_callback = self._make_progress_callback(heartbeat=heartbeat, detail="upload")
             try:
                 stream = self._open_source_stream(source_bucket, source_key, heartbeat=heartbeat)
                 return self._call_target_once(
-                    lambda: _client.putContent(_bucket, target_key, stream, headers=headers),
+                    lambda: _client.putContent(
+                        _bucket,
+                        target_key,
+                        stream,
+                        headers=headers,
+                        progressCallback=progress_callback,
+                    ),
                     operation=f"putContent:{target_key}",
                     heartbeat=heartbeat,
                 )
@@ -1075,6 +1093,10 @@ class OBSUploader:
         with reserve_context:
             def do_upload_part():
                 stream = None
+                progress_callback = self._make_progress_callback(
+                    heartbeat=heartbeat,
+                    detail=f"upload-part-{part_number}",
+                )
                 try:
                     stream = self._open_source_stream(
                         source_bucket,
@@ -1091,6 +1113,7 @@ class OBSUploader:
                             upload_id,
                             content=stream,
                             partSize=current_part_size,
+                            progressCallback=progress_callback,
                         ),
                         operation=f"uploadPart:{target_key}#{part_number}",
                         heartbeat=heartbeat,
@@ -1195,10 +1218,12 @@ class OBSUploader:
                 raise Exception(f"verify size mismatch local target={stat_result.st_size} source={context['size']}")
 
             if mode in {"etag", "head"}:
-                candidate_etag = context.get("source_etag") or self._resolve_local_etag(
-                    context.get("local_path_bytes"),
-                    context["size"],
-                )
+                candidate_etag = context.get("source_etag")
+                if candidate_etag is None and mode == "etag":
+                    candidate_etag = self._resolve_local_etag(
+                        context.get("local_path_bytes"),
+                        context["size"],
+                    )
                 if self._can_compare_with_local_file(candidate_etag, target_path, context["size"]):
                     target_hash = calc_file_md5(target_path)
                     if self._normalize_etag(candidate_etag) != target_hash:
@@ -1221,10 +1246,12 @@ class OBSUploader:
             return
 
         remote_etag = self._normalize_etag(getattr(meta.body, "etag", None))
-        source_etag = context.get("source_etag") or self._resolve_local_etag(
-            context.get("local_path_bytes"),
-            context["size"],
-        )
+        source_etag = context.get("source_etag")
+        if source_etag is None and mode == "etag":
+            source_etag = self._resolve_local_etag(
+                context.get("local_path_bytes"),
+                context["size"],
+            )
         if mode == "etag" and not self._can_compare_with_simple_etag(source_etag, remote_etag):
             raise Exception("verify etag requested but unavailable")
 
@@ -1292,6 +1319,27 @@ class OBSUploader:
         if _governor is None:
             return nullcontext()
         return _governor.reserve_buffer(min(int(current_part_size or 0), _stream_buffer_budget))
+
+    def _make_progress_callback(self, heartbeat=None, detail="upload"):
+        state = {"last": 0}
+
+        def callback(transferred, total_amount=None, total_seconds=None):
+            try:
+                current = max(int(transferred or 0), 0)
+            except Exception:
+                return
+
+            delta = current - state["last"]
+            if delta > 0:
+                self.progress.record_upload_bytes(delta)
+                state["last"] = current
+            elif current > state["last"]:
+                state["last"] = current
+
+            if heartbeat is not None:
+                heartbeat(detail)
+
+        return callback
 
     # ================================
     # 计算有效比较模式

@@ -257,7 +257,13 @@ verify_after_upload = head
 
 [PATH]
 log_dir = ./logs
+state_dir = ./state
+failed_dir = ./failed
+
+[UI]
+prompt_config = true
 show_dashboard = true
+language = zh
 ```
 
 ### 🧾 参数说明
@@ -338,6 +344,7 @@ show_dashboard = true
 
 - `prompt_config`：启动时是否允许交互修改配置
 - `show_dashboard`：是否显示实时仪表盘
+- `language`：仪表盘界面语言，`zh` 显示中文 / English 双语指标，`en` 显示英文
 
 > [!TIP]
 > `logs`、`state`、`failed`、`check_report` 等运行目录，都会**相对配置文件所在目录**解析，而不是相对当前终端目录。
@@ -542,13 +549,19 @@ prefix = target/
 - `Scan Skip`
 - `Index Status`
 - `Scan Status`
+- `Check Status`
 - `Upload Status`
 - `Cache Hit / Hit Rate`
 - `Progress`
 - `Scan Files / Scan Speed`
-- `Upload Speed`
-- `Queue Size`
-- `Upload Workers / Scan Workers`
+- `Process Speed`（累计处理速度）
+- `Net Upload Speed`（最近 5 秒实时上传速度）
+- `Check Queue / Transfer Queue`
+- `Check Workers / Upload Workers / Scan Workers`
+
+> [!TIP]
+> `UI.language = zh` 时，仪表盘指标会显示“中文 / English”双语对照；  
+> `UI.language = en` 时，仪表盘只显示英文名称。
 
 ### 报告目录
 ### 输出目录

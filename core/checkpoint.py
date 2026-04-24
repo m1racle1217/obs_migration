@@ -37,7 +37,6 @@ class Checkpoint:
 
         self._init_db()
         self.load_index_flag()
-        self._load_cache()
 
     # ================================
     # 初始化数据库结构
@@ -124,7 +123,19 @@ class Checkpoint:
 
         with self.lock:
             self.obs_batch.clear()
-            self.conn.execute("DELETE FROM obs_objects")
+            self.conn.execute("DROP TABLE IF EXISTS obs_objects")
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS obs_objects (
+                    key TEXT PRIMARY KEY,
+                    size INTEGER,
+                    etag TEXT
+                )
+                """
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_obs_key ON obs_objects(key)"
+            )
             self.conn.execute(
                 "INSERT OR REPLACE INTO meta(key,value) VALUES('obs_index_ready','0')"
             )
@@ -174,24 +185,19 @@ class Checkpoint:
     # ================================
     # 预加载完成缓存
     # ================================
-    def _load_cache(self):
-
-        with self.lock:
-            rows = self.conn.execute(
-                "SELECT path,size,mtime FROM completed"
-            ).fetchall()
-
-        for path, size, mtime in rows:
-            self.cache[path] = (size, mtime)
-
-    # ================================
-    # 判断任务是否已完成
-    # ================================
     def is_done(self, path, size, mtime):
-
-        rec = self.cache.get(self._normalize_path(path))
+        safe = self._normalize_path(path)
+        rec = self.cache.get(safe)
         if not rec:
-            return False
+            with self.lock:
+                row = self.conn.execute(
+                    "SELECT size,mtime FROM completed WHERE path=?",
+                    (safe,),
+                ).fetchone()
+            if not row:
+                return False
+            rec = (row[0], row[1])
+            self.cache[safe] = rec
 
         old_size, old_mtime = rec
         return old_size == size and old_mtime == mtime

@@ -9,6 +9,7 @@ import queue
 import shutil
 import sys
 import threading
+import time
 import unicodedata
 from datetime import datetime
 
@@ -252,6 +253,9 @@ DEFAULT_CONFIG = {
         "show_dashboard": "true",
     },
 }
+
+CONFIG_DESC["UI.language"] = "界面语言：zh（中文）或 en（English）"
+DEFAULT_CONFIG["UI"]["language"] = "zh"
 
 
 # ================================
@@ -555,6 +559,12 @@ def should_enable_dashboard(cfg=None):
         return cfg.getboolean("UI", "show_dashboard", fallback=True)
 
     return True
+
+
+def get_ui_language(cfg=None):
+    if cfg is None:
+        cfg = load_config()
+    return Dashboard.normalize_language(cfg.get("UI", "language", fallback="zh"))
 
 
 # ================================
@@ -1024,7 +1034,8 @@ def _group_summary(cfg, group_id):
     if group_id == "ui":
         return (
             f"prompt={_format_bool_text(cfg.get('UI', 'prompt_config', fallback='true'))} | "
-            f"dashboard={_format_bool_text(cfg.get('UI', 'show_dashboard', fallback='true'))}"
+            f"dashboard={_format_bool_text(cfg.get('UI', 'show_dashboard', fallback='true'))} | "
+            f"lang={get_ui_language(cfg)}"
         )
 
     return ""
@@ -1697,6 +1708,7 @@ def _legacy_main():
         force_terminal=should_force_terminal(),
         status_provider=get_status,
         scan_controller=scan_controller,
+        language=get_ui_language(cfg),
     )
 
     # ================================
@@ -1936,9 +1948,15 @@ def main():
         )
 
     db_path = os.path.join(state_dir, "tasks.db")
+    print("⏳ 正在准备断点数据库与目标索引，请稍候...")
+    startup_prepare_begin = time.time()
     checkpoint = Checkpoint(db_path)
     if target_type == MODE_S3 and compare_mode != "head_only":
         checkpoint.reset_obs_index()
+    startup_prepare_cost = time.time() - startup_prepare_begin
+    if startup_prepare_cost >= 1:
+        print(f"✓ 启动预处理完成，用时 {startup_prepare_cost:.1f}s")
+    logging.info("[STARTUP] checkpoint/index prepare cost=%.2fs", startup_prepare_cost)
 
     is_local_single_file = source_type == MODE_LOCAL and os.path.isfile(source_path)
     progress = Progress()
@@ -2053,6 +2071,7 @@ def main():
         force_terminal=should_force_terminal(),
         status_provider=get_status,
         scan_controller=scan_controller,
+        language=get_ui_language(cfg),
     )
 
     def run_index():
