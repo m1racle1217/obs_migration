@@ -168,9 +168,18 @@ class Dashboard:
         elif self.task_queue.unfinished_tasks > 0:
             upload_status = "queued"
         elif self.checker_scheduler is not None and (
-            check_status in {"queued", "waiting for scan"} or checker_active_workers > 0
+            check_status not in {"done", "n/a", "idle"}
+            or checker_active_workers > 0
+            or (self.checker_queue is not None and self.checker_queue.unfinished_tasks > 0)
         ):
-            upload_status = "waiting for check"
+            parts = []
+            if checker_active_workers > 0:
+                parts.append(f"{checker_active_workers} checking")
+            if self.checker_queue is not None and self.checker_queue.unfinished_tasks > 0:
+                parts.append(f"{self.checker_queue.unfinished_tasks} queued")
+            upload_status = (
+                f"waiting for check ({', '.join(parts)})" if parts else "waiting for check"
+            )
         elif raw_scan_status in {"pending", "running"}:
             upload_status = "waiting for scan"
         elif raw_scan_status in {"done", "n/a"} and (
@@ -229,7 +238,7 @@ class Dashboard:
         table.add_row("Upload Speed", f"{upload_speed:.1f} MB/s")
         if self.checker_queue is not None:
             table.add_row("Check Queue", checker_queue_display)
-        table.add_row("Queue Size", queue_display)
+        table.add_row("Transfer Queue", queue_display)
         if self.checker_scheduler is not None:
             table.add_row("Check Workers", str(len(self.checker_scheduler.threads)))
         table.add_row("Upload Workers", str(len(self.scheduler.threads)))

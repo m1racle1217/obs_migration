@@ -568,7 +568,23 @@ def should_force_terminal():
     if os.getenv("CI"):
         return False
 
-    return os.name == "nt" or os.getenv("PYCHARM_HOSTED") == "1"
+    if os.name == "nt" or os.getenv("PYCHARM_HOSTED") == "1":
+        return True
+
+    try:
+        if sys.stdout.isatty() or sys.stderr.isatty() or sys.stdin.isatty():
+            return True
+    except Exception:
+        pass
+
+    term_name = (os.getenv("TERM") or "").strip().lower()
+    if term_name and term_name != "dumb":
+        return True
+
+    if os.getenv("SSH_TTY") or os.getenv("COLORTERM"):
+        return True
+
+    return False
 
 
 # ================================
