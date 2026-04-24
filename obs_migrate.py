@@ -1,96 +1,321 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""提供 OBS / S3 兼容对象存储迁移工具的命令行入口。"""
 
-import os
-import sys
-import queue
-import logging
-import threading
 import configparser
-import time
+import logging
+import os
+import queue
+import sys
+import threading
 from datetime import datetime
-from cryptography.fernet import Fernet
-from core.obs_index import build_obs_index
+
+from bootstrap_runtime import bootstrap_local_deps
+
+bootstrap_local_deps()
+
+import core.uploader as uploader_module
+try:
+    from colorama import Fore, Style, init as colorama_init
+except ImportError:
+    # ================================
+    # 提供无颜色回退类
+    # ================================
+    class _PlainColor:
+        BLACK = ""
+        BLUE = ""
+        CYAN = ""
+        GREEN = ""
+        MAGENTA = ""
+        RED = ""
+        RESET = ""
+        RESET_ALL = ""
+        WHITE = ""
+        YELLOW = ""
+
+    Fore = _PlainColor()
+    Style = _PlainColor()
+
+    # ================================
+    # 提供空实现的颜色初始化
+    # ================================
+    def colorama_init(*args, **kwargs):
+        return None
 
 from core import (
-    scan_directory,
-    Scheduler,
-    OBSUploader,
-    init_uploader,
-    Progress,
+    AdaptiveScanController,
     Checkpoint,
     Dashboard,
-    Reporter
+    OBSUploader,
+    Progress,
+    Reporter,
+    Scheduler,
+    init_source_client,
+    init_target,
+    scan_directory,
+    scan_s3_objects,
 )
+from core.obs_index import build_obs_index
+from core.utils import parse_size, sanitize_key, setup_logger
 
-from core.utils import parse_size, setup_logger
-from colorama import Fore, Style, init
-
-init(autoreset=True)
+colorama_init(autoreset=True)
 
 
 CONFIG_FILE = "config.ini"
+CONFIG_ENV_VAR = "OBS_MIGRATE_CONFIG"
 KEY_FILE = ".config.key"
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+SOURCE_SECTION = "SOURCE"
+TARGET_SECTION = "TARGET"
+LEGACY_TARGET_SECTION = "OBS"
+LEGACY_TASK_SECTION = "TASK"
+
+MODE_LOCAL = "local"
+MODE_S3 = "s3"
+
+SENSITIVE_FIELDS = {
+    (SOURCE_SECTION, "ak"),
+    (SOURCE_SECTION, "sk"),
+    (TARGET_SECTION, "ak"),
+    (TARGET_SECTION, "sk"),
+}
+
+CONFIG_DESC = {
+    "SOURCE.type": "源端模式：local 或 s3",
+    "SOURCE.path": "本地源目录或单文件路径（source.type=local 时使用）",
+    "SOURCE.ak": "源端 S3 AccessKey（source.type=s3 时使用）",
+    "SOURCE.sk": "源端 S3 SecretKey（source.type=s3 时使用）",
+    "SOURCE.endpoint": "源端 S3 Endpoint（source.type=s3 时使用）",
+    "SOURCE.bucket": "源端 S3 桶名称（source.type=s3 时使用）",
+    "SOURCE.prefix": "源端 S3 前缀（可为空，source.type=s3 时使用）",
+    "TARGET.type": "目标端模式：local 或 s3",
+    "TARGET.path": "本地目标根目录（target.type=local 时使用）",
+    "TARGET.ak": "目标端 S3 AccessKey（target.type=s3 时使用）",
+    "TARGET.sk": "目标端 S3 SecretKey（target.type=s3 时使用）",
+    "TARGET.endpoint": "目标端 S3 Endpoint（target.type=s3 时使用）",
+    "TARGET.bucket": "目标端 S3 桶名称（target.type=s3 时使用）",
+    "TARGET.prefix": "目标端 S3 前缀（可为空，target.type=s3 时使用）",
+    "UPLOAD.workers": "上传并发线程数 (推荐 16-64)",
+    "UPLOAD.part_size": "分片大小 (例如 64M)",
+    "UPLOAD.multipart_threshold": "超过该大小启用分片上传",
+    "UPLOAD.retry": "失败重试次数",
+    "UPLOAD.rate_limit": "API QPS 限制",
+    "SCAN.batch_size": "扫描批次",
+    "SCAN.queue_size": "任务队列最大长度",
+    "SCAN.scan_workers": "扫描线程数 (local/对象存储通用，推荐 2-64)",
+    "CHECK.enable_etag_check": "是否启用 ETAG 校验",
+    "CHECK.enable_head_check": "是否启用 HEAD 校验",
+    "CHECK.strict_client_check": "client 未初始化时是否报错",
+    "PATH.log_dir": "日志目录",
+    "PATH.state_dir": "断点数据库目录",
+    "PATH.failed_dir": "失败任务目录",
+    "UI.prompt_config": "启动时是否允许交互修改配置",
+    "UI.show_dashboard": "是否显示实时仪表盘",
+}
+
+DEFAULT_CONFIG = {
+    SOURCE_SECTION: {
+        "type": MODE_LOCAL,
+        "path": "",
+        "ak": "",
+        "sk": "",
+        "endpoint": "",
+        "bucket": "",
+        "prefix": "",
+    },
+    TARGET_SECTION: {
+        "type": MODE_S3,
+        "path": "",
+        "ak": "",
+        "sk": "",
+        "endpoint": "",
+        "bucket": "",
+        "prefix": "",
+    },
+    "UPLOAD": {
+        "workers": "32",
+        "part_size": "64M",
+        "multipart_threshold": "128M",
+        "retry": "3",
+        "rate_limit": "200",
+    },
+    "SCAN": {
+        "batch_size": "1000",
+        "queue_size": "20000",
+        "scan_workers": "4",
+    },
+    "CHECK": {
+        "enable_etag_check": "false",
+        "enable_head_check": "true",
+        "strict_client_check": "true",
+    },
+    "PATH": {
+        "log_dir": "./logs",
+        "state_dir": "./state",
+        "failed_dir": "./failed",
+    },
+    "UI": {
+        "prompt_config": "true",
+        "show_dashboard": "true",
+    },
+}
 
 
-# ==========================================================
-# 加密模块
-# ==========================================================
-
-def load_cipher():
-
-    if not os.path.exists(KEY_FILE):
-        key = Fernet.generate_key()
-
-        with open(KEY_FILE, "wb") as f:
-            f.write(key)
-
-    else:
-        with open(KEY_FILE, "rb") as f:
-            key = f.read()
-
-    return Fernet(key)
+# ================================
+# 定位配置文件
+# ================================
+def resolve_config_file():
+    config_from_env = (os.getenv(CONFIG_ENV_VAR) or "").strip()
+    if config_from_env:
+        return os.path.abspath(os.path.expanduser(config_from_env))
+    if os.path.isabs(CONFIG_FILE):
+        return CONFIG_FILE
+    return os.path.join(APP_DIR, CONFIG_FILE)
 
 
-cipher = load_cipher()
+# ================================
+# 获取配置基目录
+# ================================
+def config_base_dir():
+    return os.path.dirname(os.path.abspath(resolve_config_file()))
 
 
-def encrypt_value(v):
-    return cipher.encrypt(v.encode()).decode()
+# ================================
+# 定位密钥文件
+# ================================
+def resolve_key_file():
+    if os.path.isabs(KEY_FILE):
+        return KEY_FILE
+    return os.path.join(config_base_dir(), KEY_FILE)
 
 
-def decrypt_value(v):
+# ================================
+# 解析运行期目录
+# ================================
+def resolve_runtime_path(path_value):
+    raw_value = (path_value or "").strip()
+    if not raw_value:
+        return config_base_dir()
+    if os.path.isabs(raw_value):
+        return raw_value
+    return os.path.abspath(os.path.join(config_base_dir(), raw_value))
 
-    if not v:
-        return ""
+
+_cipher = None
+_fernet_cls = None
+_fernet_import_error = None
+
+
+# ================================
+# 按需加载 Fernet
+# ================================
+def _load_fernet_class(required=False):
+    global _fernet_cls, _fernet_import_error
+
+    if _fernet_cls is not None:
+        return _fernet_cls
+
+    if _fernet_import_error is not None:
+        if required:
+            raise RuntimeError(
+                "encrypted config requires cryptography; please prepare vendor dependencies or use trusted plaintext config"
+            ) from _fernet_import_error
+        return None
 
     try:
-        return cipher.decrypt(v.encode()).decode()
+        from cryptography.fernet import Fernet
+    except Exception as exc:
+        _fernet_import_error = exc
+        if required:
+            raise RuntimeError(
+                "encrypted config requires cryptography; please prepare vendor dependencies or use trusted plaintext config"
+            ) from exc
+        return None
 
-    except Exception:
-        return v
+    _fernet_cls = Fernet
+    return _fernet_cls
 
 
-def mask_secret(v):
+# ================================
+# 加载加密器
+# ================================
+def load_cipher(required=False):
+    global _cipher
 
-    if not v:
+    if _cipher is not None:
+        return _cipher
+
+    fernet_cls = _load_fernet_class(required=required)
+    if fernet_cls is None:
+        return None
+
+    key_file = resolve_key_file()
+
+    if not os.path.exists(key_file):
+        key = fernet_cls.generate_key()
+        with open(key_file, "wb") as f:
+            f.write(key)
+    else:
+        with open(key_file, "rb") as f:
+            key = f.read()
+
+    _cipher = fernet_cls(key)
+    return _cipher
+
+
+# ================================
+# 加密敏感值
+# ================================
+def encrypt_value(value):
+    return load_cipher(required=True).encrypt(value.encode()).decode()
+
+
+# ================================
+# 解密敏感值
+# ================================
+def decrypt_value(value):
+    if not value:
         return ""
 
+    if not value.startswith("gAAAA"):
+        return value
+
+    cipher = load_cipher(required=False)
+    if cipher is None:
+        raise RuntimeError(
+            "encrypted config detected but cryptography is unavailable; please prepare vendor dependencies and .config.key"
+        )
+
+    try:
+        return cipher.decrypt(value.encode()).decode()
+    except Exception as exc:
+        raise RuntimeError(
+            "failed to decrypt sensitive config value; please verify .config.key matches the config"
+        ) from exc
+
+
+# ================================
+# 脱敏显示
+# ================================
+def mask_secret(value):
+    if not value:
+        return ""
     return "*" * 8
 
 
-# ==========================================================
-# 目录初始化
-# ==========================================================
-
+# ================================
+# 创建运行目录
+# ================================
 def ensure_dirs():
+    for directory in ("./logs", "./state", "./failed"):
+        os.makedirs(resolve_runtime_path(directory), exist_ok=True)
 
-    for d in ["logs", "state", "failed"]:
-        os.makedirs(d, exist_ok=True)
 
-
+# ================================
+# 解析布尔环境变量
+# ================================
 def parse_env_bool(name):
-
     value = os.getenv(name)
     if value is None:
         return None
@@ -103,8 +328,10 @@ def parse_env_bool(name):
     return None
 
 
+# ================================
+# 判断是否允许交互改配置
+# ================================
 def should_prompt_config(cfg=None):
-
     env_value = parse_env_bool("OBS_MIGRATE_INTERACTIVE")
     if env_value is not None:
         return env_value
@@ -118,8 +345,10 @@ def should_prompt_config(cfg=None):
     return True
 
 
+# ================================
+# 判断是否启用仪表盘
+# ================================
 def should_enable_dashboard(cfg=None):
-
     env_value = parse_env_bool("OBS_MIGRATE_DASHBOARD")
     if env_value is not None:
         return env_value
@@ -133,8 +362,10 @@ def should_enable_dashboard(cfg=None):
     return True
 
 
+# ================================
+# 判断是否强制终端渲染
+# ================================
 def should_force_terminal():
-
     env_value = parse_env_bool("OBS_MIGRATE_FORCE_TERMINAL")
     if env_value is not None:
         return env_value
@@ -145,327 +376,434 @@ def should_force_terminal():
     return os.name == "nt" or os.getenv("PYCHARM_HOSTED") == "1"
 
 
+# ================================
+# 计算本地扫描线程数
+# ================================
 def resolve_scan_workers(requested):
-
+    requested = max(1, int(requested or 1))
     cpu_count = os.cpu_count() or 4
-    recommended = max(2, min(32, cpu_count * 2))
+    recommended = max(4, min(64, cpu_count * 4))
     return max(1, min(requested, recommended))
 
 
-# ==========================================================
-# 参数说明
-# ==========================================================
-
-CONFIG_DESC = {
-
-    "OBS.ak": "华为云 AccessKey",
-    "OBS.sk": "华为云 SecretKey",
-    "OBS.endpoint": "OBS Endpoint，例如 obs.cn-south-1.myhuaweicloud.com",
-    "OBS.bucket": "目标桶名称",
-
-    "TASK.local_dir": "需要迁移的本地目录或文件",
-    "TASK.obs_prefix": "OBS 目标前缀",
-
-    "UPLOAD.workers": "上传并发线程数 (推荐 16-64)",
-    "UPLOAD.part_size": "分片大小 (例如 64M)",
-    "UPLOAD.multipart_threshold": "超过该大小启用分片上传",
-    "UPLOAD.retry": "失败重试次数",
-    "UPLOAD.rate_limit": "API QPS 限制",
-
-    "SCAN.batch_size": "扫描批次",
-    "SCAN.queue_size": "任务队列最大长度",
-    "SCAN.scan_workers": "扫描线程数 (推荐 2-8，目录多时可调大)",
-
-    "PATH.log_dir": "日志目录",
-    "PATH.state_dir": "断点数据库目录",
-    "PATH.failed_dir": "失败任务目录",
-
-    "CHECK.enable_etag_check": "是否启用 ETAG 校验（最准确但最慢）",
-    "CHECK.enable_head_check": "是否启用 HEAD 校验（更准确但更慢）",
-    "CHECK.strict_client_check": "client 未初始化是否报错（true=严格模式）",
-
-    "UI.prompt_config": "启动时是否允许交互修改配置",
-    "UI.show_dashboard": "是否显示实时仪表盘",
+# ================================
+# 计算远端扫描线程数
+# ================================
+def resolve_remote_scan_workers(requested):
+    return max(1, min(int(requested), 128))
 
 
-}
+# ================================
+# 计算最小扫描线程数
+# ================================
+def resolve_min_scan_workers(requested):
+    requested = max(1, int(requested or 1))
+    return max(1, min(4, requested // 8 or 1))
 
 
-# ==========================================================
-# 默认配置
-# ==========================================================
+# ================================
+# 判断是否为敏感字段
+# ================================
+def _is_sensitive(section, key):
+    return (section, key) in SENSITIVE_FIELDS
 
-DEFAULT_CONFIG = {
 
-    "OBS": {
+# ================================
+# 归一化模式输入
+# ================================
+def _normalize_mode(value, default=None):
+    if value is None:
+        return default
 
-        "ak": "",
-        "sk": "",
-        "endpoint": "",
-        "bucket": ""
-    },
+    text = str(value).strip().lower()
+    if not text:
+        return default
 
-    "TASK": {
-
-        "local_dir": "",
-        "obs_prefix": ""
-    },
-
-    "UPLOAD": {
-
-        "workers": "32",
-        "part_size": "64M",
-        "multipart_threshold": "128M",
-        "retry": "3",
-        "rate_limit": "200"
-    },
-
-    "SCAN": {
-
-        "batch_size": "1000",
-        "queue_size": "20000",
-        "scan_workers": "4"
-    },
-
-    "PATH": {
-
-        "log_dir": "./logs",
-        "state_dir": "./state",
-        "failed_dir": "./failed"
-    },
-    "UI": {
-
-        "prompt_config": "true",
-        "show_dashboard": "true"
-    },
-    "CHECK": {
-
-    "enable_head_check": "true",
-    "strict_client_check": "true",
-    "enable_etag_check" : "false"
+    mapping = {
+        "1": MODE_LOCAL,
+        "local": MODE_LOCAL,
+        "2": MODE_S3,
+        "s3": MODE_S3,
     }
-}
+    return mapping.get(text)
 
 
+# ================================
+# 交互选择模式
+# ================================
+def _prompt_mode(section_label, current_value, allow_empty=False):
+    current_value = _normalize_mode(current_value, default=MODE_LOCAL)
 
-# ==========================================================
+    while True:
+        print(f"\n请选择 {section_label} 模式：")
+        print("1. local")
+        print("2. s3")
+        raw = input(f"{section_label}.type [{current_value}]: ").strip()
+
+        if not raw and allow_empty:
+            return current_value
+
+        normalized = _normalize_mode(raw, default=current_value if allow_empty else None)
+        if normalized in {MODE_LOCAL, MODE_S3}:
+            return normalized
+
+        print("请输入 local / s3，或者输入 1 / 2。")
+
+
+# ================================
+# 按需加密配置值
+# ================================
+def _maybe_encrypt_for_store(section, key, value):
+    if not value:
+        return value
+    if not _is_sensitive(section, key):
+        return value
+    if value.startswith("gAAAA"):
+        return value
+    return encrypt_value(value)
+
+
+# ================================
+# 从配置中解密取值
+# ================================
+def _decrypt_from_config(cfg, section, key):
+    return decrypt_value(cfg.get(section, key, fallback="").strip())
+
+
+# ================================
+# 获取有序配置分组
+# ================================
+def _ordered_sections(cfg):
+    ordered = []
+    for section in DEFAULT_CONFIG:
+        if cfg.has_section(section):
+            ordered.append(section)
+
+    for section in cfg.sections():
+        if section not in ordered:
+            ordered.append(section)
+
+    return ordered
+
+
+# ================================
+# 生成源端标签
+# ================================
+def _source_label(source_type, source_path, source_bucket, source_prefix):
+    if source_type == MODE_LOCAL:
+        return source_path
+
+    prefix = source_prefix.strip("/") or "_root_"
+    return f"{source_bucket}/{prefix}"
+
+
+# ================================
+# 清洗名称用于文件命名
+# ================================
+def _sanitize_name(name):
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in name)
+    return cleaned or "root"
+
+
+# ================================
+# 迁移旧版目标配置
+# ================================
+def _migrate_legacy_target_section(cfg):
+    if not cfg.has_section(LEGACY_TARGET_SECTION):
+        return False
+
+    if not cfg.has_section(TARGET_SECTION):
+        cfg.add_section(TARGET_SECTION)
+
+    cfg.set(TARGET_SECTION, "type", cfg.get(TARGET_SECTION, "type", fallback=MODE_S3) or MODE_S3)
+    for key in ("ak", "sk", "endpoint", "bucket"):
+        if cfg.has_option(LEGACY_TARGET_SECTION, key) and not cfg.has_option(TARGET_SECTION, key):
+            cfg.set(TARGET_SECTION, key, cfg.get(LEGACY_TARGET_SECTION, key))
+
+    cfg.remove_section(LEGACY_TARGET_SECTION)
+    return True
+
+
+# ================================
+# 迁移旧版任务配置
+# ================================
+def _migrate_legacy_task_section(cfg):
+    if not cfg.has_section(LEGACY_TASK_SECTION):
+        return False
+
+    updated = False
+    if not cfg.has_section(SOURCE_SECTION):
+        cfg.add_section(SOURCE_SECTION)
+        updated = True
+    if not cfg.has_section(TARGET_SECTION):
+        cfg.add_section(TARGET_SECTION)
+        updated = True
+
+    if cfg.has_option(LEGACY_TASK_SECTION, "local_dir") and not cfg.has_option(SOURCE_SECTION, "path"):
+        cfg.set(SOURCE_SECTION, "path", cfg.get(LEGACY_TASK_SECTION, "local_dir"))
+        if not cfg.has_option(SOURCE_SECTION, "type"):
+            cfg.set(SOURCE_SECTION, "type", MODE_LOCAL)
+        updated = True
+
+    if cfg.has_option(LEGACY_TASK_SECTION, "obs_prefix") and not cfg.has_option(TARGET_SECTION, "prefix"):
+        cfg.set(TARGET_SECTION, "prefix", cfg.get(LEGACY_TASK_SECTION, "obs_prefix"))
+        if not cfg.has_option(TARGET_SECTION, "type"):
+            cfg.set(TARGET_SECTION, "type", MODE_S3)
+        updated = True
+
+    cfg.remove_section(LEGACY_TASK_SECTION)
+    return True or updated
+
+
+# ================================
 # 初始化配置
-# ==========================================================
-
+# ================================
 def init_config():
-
     print("\n首次运行，初始化配置\n")
 
     cfg = configparser.ConfigParser()
+    for section, items in DEFAULT_CONFIG.items():
+        cfg[section] = {}
+        for key, default_value in items.items():
+            desc = CONFIG_DESC.get(f"{section}.{key}", "")
+            if desc:
+                print(f"\n{desc}")
 
-    for s, items in DEFAULT_CONFIG.items():
+            if _is_sensitive(section, key):
+                print(f"注意：敏感信息会以加密形式写入 {resolve_config_file()}")
 
-        cfg[s] = {}
-
-        for k, v in items.items():
-
-            desc = CONFIG_DESC.get(f"{s}.{k}", "")
-
-            print(f"\n{desc}")
-
-            if k in ["ak", "sk"]:
-
-                print("⚠️ 重要信息，请妥善保管")
-
-                # 修改这里
-                val = input(f"{k}: ")
-
-                val = encrypt_value(val)
-
+            if key == "type":
+                section_label = "source" if section == SOURCE_SECTION else "target"
+                value = _prompt_mode(section_label, default_value, allow_empty=True)
             else:
+                value = input(f"{key}: ").strip()
+                if not value:
+                    value = default_value
 
-                val = input(f"{k}: ")
-
-            if not val:
-                val = v
-
-            cfg[s][k] = val
+            cfg[section][key] = _maybe_encrypt_for_store(section, key, value)
 
     write_config_with_comments(cfg)
-
-    print("\n配置文件已生成 config.ini\n")
-
+    print(f"\n配置文件已生成：{resolve_config_file()}\n")
     return cfg
 
 
-# ==========================================================
-# 显示配置
-# ==========================================================
-
+# ================================
+# 展示当前配置
+# ================================
 def show_config(cfg):
-
     print("\n当前配置\n")
 
-    idx = 1
     mapping = {}
+    index = 1
 
-    for s in cfg.sections():
+    for section in _ordered_sections(cfg):
+        print(f"{Fore.CYAN}[{section}]{Style.RESET_ALL}")
+        for key, value in cfg[section].items():
+            shown_value = mask_secret(value) if _is_sensitive(section, key) else value
+            if key == "rate_limit":
+                shown_value = f"{shown_value} req/s"
 
-        # 👉 section 蓝色
-        print(f"{Fore.CYAN}[{s}]{Style.RESET_ALL}")
-
-        for k, v in cfg[s].items():
-
-            # 敏感信息隐藏
-            if k in ["ak", "sk"]:
-                v = mask_secret(v)
-
-            # 单位增强
-            if k == "rate_limit":
-                v = f"{v} req/s"
-
-            desc = CONFIG_DESC.get(f"{s}.{k}", "")
-
-            # 👉 描述黄色
+            desc = CONFIG_DESC.get(f"{section}.{key}", "")
             if desc:
-                print(f"{idx}. {Fore.YELLOW}{desc}{Style.RESET_ALL}")
-                print(f"    {Fore.GREEN}{k}{Style.RESET_ALL} = {v}")
+                print(f"{index}. {Fore.YELLOW}{desc}{Style.RESET_ALL}")
+                print(f"    {Fore.GREEN}{key}{Style.RESET_ALL} = {shown_value}")
             else:
-                print(f"{idx}. {Fore.GREEN}{k}{Style.RESET_ALL} = {v}")
+                print(f"{index}. {Fore.GREEN}{key}{Style.RESET_ALL} = {shown_value}")
 
-            mapping[str(idx)] = (s, k)
-            idx += 1
+            mapping[str(index)] = (section, key)
+            index += 1
 
         print()
 
     return mapping
 
-# ==========================================================
-# 修改配置
-# ==========================================================
 
-def modify_config(cfg):
+# ================================
+# 交互修改配置
+# ================================
+def modify_config(cfg, initial_choice=None, mapping=None):
+    if mapping is None:
+        mapping = show_config(cfg)
+    print("\n输入编号修改，q 退出\n")
 
-    mapping = show_config(cfg)
-
-    print("\n输入编号修改，q退出\n")
-
+    choice = initial_choice
     while True:
-
-        c = input("选择编号: ")
-
-        if c.lower() == "q":
+        if choice is None:
+            choice = input("选择编号: ").strip()
+        if choice.lower() == "q":
             break
-
-        if c not in mapping:
+        if choice not in mapping:
+            choice = None
             continue
 
-        s, k = mapping[c]
+        section, key = mapping[choice]
+        desc = CONFIG_DESC.get(f"{section}.{key}", "")
+        if desc:
+            print(desc)
 
-        print(CONFIG_DESC.get(f"{s}.{k}", ""))
+        if _is_sensitive(section, key):
+            print(f"注意：敏感信息会以加密形式写入 {resolve_config_file()}")
 
-        if k in ["ak", "sk"]:
-
-            print("⚠️ 重要信息，请妥善保管")
-
-            # 修改这里
-            val = input("新值: ")
-
-            val = encrypt_value(val)
-
+        if key == "type" and section in {SOURCE_SECTION, TARGET_SECTION}:
+            section_label = "source" if section == SOURCE_SECTION else "target"
+            new_value = _prompt_mode(section_label, cfg.get(section, key, fallback=MODE_LOCAL), allow_empty=True)
         else:
+            new_value = input("新值: ").strip()
 
-            val = input("新值: ")
-
-        cfg[s][k] = val
+        cfg[section][key] = _maybe_encrypt_for_store(section, key, new_value)
+        choice = None
 
     write_config_with_comments(cfg)
-
     print("\n配置已更新\n")
 
 
-# ==========================================================
+# ================================
+# 获取配置操作输入
+# ================================
+def _prompt_config_action(mapping):
+    while True:
+        answer = input("\n是否修改配置? (y/N，或直接输入编号): ").strip()
+        lowered = answer.lower()
+
+        if not answer or lowered in {"n", "no"}:
+            return None
+
+        if lowered in {"y", "yes"}:
+            return "modify"
+
+        if answer in mapping:
+            return answer
+
+        print("请输入 y / n，或直接输入上面的配置编号。")
+
+
+# ================================
 # 加载配置
-# ==========================================================
-
+# ================================
 def load_config():
-
-    if not os.path.exists(CONFIG_FILE):
+    config_file = resolve_config_file()
+    if not os.path.exists(config_file):
         return init_config()
 
     cfg = configparser.ConfigParser()
-    cfg.read(CONFIG_FILE, encoding="utf-8")
+    cfg.read(config_file, encoding="utf-8")
 
     updated = False
+    if _migrate_legacy_target_section(cfg):
+        updated = True
+    if _migrate_legacy_task_section(cfg):
+        updated = True
 
     for section, items in DEFAULT_CONFIG.items():
         if not cfg.has_section(section):
             cfg.add_section(section)
             updated = True
 
-        for k, v in items.items():
-            if not cfg.has_option(section, k):
-                cfg.set(section, k, v)
+        for key, default_value in items.items():
+            if not cfg.has_option(section, key):
+                cfg.set(section, key, default_value)
                 updated = True
 
-    # 写回
+    for section, default_mode in ((SOURCE_SECTION, MODE_LOCAL), (TARGET_SECTION, MODE_S3)):
+        raw_mode = cfg.get(section, "type", fallback=default_mode)
+        normalized = _normalize_mode(raw_mode, default=default_mode)
+        if normalized is None:
+            normalized = default_mode
+        if raw_mode != normalized:
+            cfg.set(section, "type", normalized)
+            updated = True
+
     if updated:
         write_config_with_comments(cfg)
-
-        print("\n⚙️ 检测到新配置项，已自动更新 config.ini\n")
+        print(f"\n检测到新配置项，已自动更新 {resolve_config_file()}\n")
 
     if should_prompt_config(cfg):
-        show_config(cfg)
-
-        c = input("\n是否修改配置? (y/N): ")
-
-        if c.lower() == "y":
-            modify_config(cfg)
+        mapping = show_config(cfg)
+        action = _prompt_config_action(mapping)
+        if action == "modify":
+            modify_config(cfg, mapping=mapping)
+        elif action in mapping:
+            modify_config(cfg, initial_choice=action, mapping=mapping)
 
     return cfg
 
-# ==========================================================
-# 写配置（带注释）
-# ==========================================================
 
+# ================================
+# 写回带注释的配置
+# ================================
 def write_config_with_comments(cfg):
-
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-
-        for section in cfg.sections():
-
-            f.write(f"# ------------------------------\n")
+    with open(resolve_config_file(), "w", encoding="utf-8") as f:
+        for section in _ordered_sections(cfg):
+            f.write("# ------------------------------\n")
             f.write(f"# {section}\n")
-            f.write(f"# ------------------------------\n")
+            f.write("# ------------------------------\n")
             f.write(f"[{section}]\n\n")
 
             for key, value in cfg[section].items():
-
                 desc = CONFIG_DESC.get(f"{section}.{key}", "")
-
                 if desc:
                     f.write(f"# {desc}\n")
-
                 f.write(f"{key} = {value}\n\n")
 
             f.write("\n")
 
-# ==========================================================
-# 配置校验
-# ==========================================================
 
+# ================================
+# 校验配置有效性
+# ================================
 def validate_config(cfg):
+    source_type = _normalize_mode(cfg.get(SOURCE_SECTION, "type", fallback=MODE_LOCAL), default=MODE_LOCAL)
+    target_type = _normalize_mode(cfg.get(TARGET_SECTION, "type", fallback=MODE_S3), default=MODE_S3)
 
-    endpoint = cfg.get("OBS", "endpoint")
-    bucket = cfg.get("OBS", "bucket")
-    local_dir = cfg.get("TASK", "local_dir")
+    source_path = cfg.get(SOURCE_SECTION, "path", fallback="").strip()
+    source_endpoint = cfg.get(SOURCE_SECTION, "endpoint", fallback="").strip()
+    source_bucket = cfg.get(SOURCE_SECTION, "bucket", fallback="").strip()
+    source_ak = cfg.get(SOURCE_SECTION, "ak", fallback="").strip()
+    source_sk = cfg.get(SOURCE_SECTION, "sk", fallback="").strip()
 
-    if not endpoint:
-        print("❌ endpoint 未配置")
+    target_path = cfg.get(TARGET_SECTION, "path", fallback="").strip()
+    target_endpoint = cfg.get(TARGET_SECTION, "endpoint", fallback="").strip()
+    target_bucket = cfg.get(TARGET_SECTION, "bucket", fallback="").strip()
+    target_ak = cfg.get(TARGET_SECTION, "ak", fallback="").strip()
+    target_sk = cfg.get(TARGET_SECTION, "sk", fallback="").strip()
+
+    if source_type not in {MODE_LOCAL, MODE_S3}:
+        print("❌ SOURCE.type 仅支持 local 或 s3")
         sys.exit(1)
 
-    if not bucket:
-        print("❌ bucket 未配置")
+    if target_type not in {MODE_LOCAL, MODE_S3}:
+        print("❌ TARGET.type 仅支持 local 或 s3")
         sys.exit(1)
 
-    if not os.path.exists(local_dir):
-        print("❌ local_dir 不存在")
-        sys.exit(1)
+    if source_type == MODE_LOCAL:
+        if not source_path or not os.path.exists(source_path):
+            print("❌ SOURCE.path 不存在")
+            sys.exit(1)
+    else:
+        if not source_ak or not source_sk:
+            print("❌ SOURCE.ak / SOURCE.sk 未配置")
+            sys.exit(1)
+        if not source_endpoint:
+            print("❌ SOURCE.endpoint 未配置")
+            sys.exit(1)
+        if not source_bucket:
+            print("❌ SOURCE.bucket 未配置")
+            sys.exit(1)
+
+    if target_type == MODE_LOCAL:
+        if not target_path:
+            print("❌ TARGET.path 未配置")
+            sys.exit(1)
+    else:
+        if not target_ak or not target_sk:
+            print("❌ TARGET.ak / TARGET.sk 未配置")
+            sys.exit(1)
+        if not target_endpoint:
+            print("❌ TARGET.endpoint 未配置")
+            sys.exit(1)
+        if not target_bucket:
+            print("❌ TARGET.bucket 未配置")
+            sys.exit(1)
 
     numeric_fields = [
         ("UPLOAD", "workers"),
@@ -475,7 +813,6 @@ def validate_config(cfg):
         ("SCAN", "queue_size"),
         ("SCAN", "batch_size"),
     ]
-
     for section, key in numeric_fields:
         value = cfg.getint(section, key, fallback=0)
         if value <= 0:
@@ -486,7 +823,6 @@ def validate_config(cfg):
         ("UPLOAD", "part_size"),
         ("UPLOAD", "multipart_threshold"),
     ]
-
     for section, key in size_fields:
         try:
             value = parse_size(cfg.get(section, key))
@@ -499,141 +835,143 @@ def validate_config(cfg):
             sys.exit(1)
 
 
-# ==========================================================
-# 日志
-# ==========================================================
-
-def build_log_file(log_dir, local_dir):
-
+# ================================
+# 生成日志文件名
+# ================================
+def build_log_file(log_dir, source_name):
     os.makedirs(log_dir, exist_ok=True)
 
-    name = os.path.basename(os.path.normpath(local_dir))
-
-    if not name:
-        name = "root"
-
+    name = _sanitize_name(os.path.basename(os.path.normpath(source_name)))
     date = datetime.now().strftime("%Y%m%d")
 
-    i = 1
-
+    index = 1
     while True:
+        path = os.path.join(log_dir, f"{name}_{date}_{index}.log")
+        if not os.path.exists(path):
+            return path
+        index += 1
 
-        f = os.path.join(log_dir, f"{name}_{date}_{i}.log")
 
-        if not os.path.exists(f):
-            return f
-
-        i += 1
-
-# ==========================================================
-# 主程序
-# ==========================================================
-
-def main():
-
-    ensure_dirs()
-
-    cfg = load_config()
-
-    validate_config(cfg)
-
-    ak_raw = cfg.get("OBS", "ak", fallback="").strip()
-    sk_raw = cfg.get("OBS", "sk", fallback="").strip()
-
+# ================================
+# 确保敏感字段已加密
+# ================================
+def _ensure_secret_fields_encrypted(cfg):
     changed = False
-
-    if ak_raw and not ak_raw.startswith("gAAAA"):
-        ak_raw = encrypt_value(ak_raw)
-        cfg.set("OBS", "ak", ak_raw)
-        changed = True
-
-    if sk_raw and not sk_raw.startswith("gAAAA"):
-        sk_raw = encrypt_value(sk_raw)
-        cfg.set("OBS", "sk", sk_raw)
-        changed = True
+    for section, key in SENSITIVE_FIELDS:
+        value = cfg.get(section, key, fallback="").strip()
+        if value and not value.startswith("gAAAA"):
+            cfg.set(section, key, encrypt_value(value))
+            changed = True
 
     if changed:
         write_config_with_comments(cfg)
 
-    if not ak_raw or not sk_raw:
-        print("\n❌ AK/SK 未配置")
-        sys.exit(1)
 
-    ak = decrypt_value(ak_raw)
-    sk = decrypt_value(sk_raw)
+# ================================
+# 主流程
+# ================================
+def main():
+    ensure_dirs()
 
-    local_dir = cfg.get("TASK", "local_dir")
+    cfg = load_config()
+    validate_config(cfg)
+    _ensure_secret_fields_encrypted(cfg)
 
-    obs_prefix = cfg.get("TASK", "obs_prefix")
+    source_type = _normalize_mode(cfg.get(SOURCE_SECTION, "type", fallback=MODE_LOCAL), default=MODE_LOCAL)
+    target_type = _normalize_mode(cfg.get(TARGET_SECTION, "type", fallback=MODE_S3), default=MODE_S3)
+
+    source_path = cfg.get(SOURCE_SECTION, "path", fallback="").strip()
+    source_ak = _decrypt_from_config(cfg, SOURCE_SECTION, "ak")
+    source_sk = _decrypt_from_config(cfg, SOURCE_SECTION, "sk")
+    source_endpoint = cfg.get(SOURCE_SECTION, "endpoint", fallback="").strip()
+    source_bucket = cfg.get(SOURCE_SECTION, "bucket", fallback="").strip()
+    source_prefix = sanitize_key(cfg.get(SOURCE_SECTION, "prefix", fallback="")).strip("/")
+
+    target_path = cfg.get(TARGET_SECTION, "path", fallback="").strip()
+    target_ak = _decrypt_from_config(cfg, TARGET_SECTION, "ak")
+    target_sk = _decrypt_from_config(cfg, TARGET_SECTION, "sk")
+    target_endpoint = cfg.get(TARGET_SECTION, "endpoint", fallback="").strip()
+    target_bucket = cfg.get(TARGET_SECTION, "bucket", fallback="").strip()
+    target_prefix = sanitize_key(cfg.get(TARGET_SECTION, "prefix", fallback="")).strip("/")
+
+    source_label = _source_label(source_type, source_path, source_bucket, source_prefix)
 
     workers = cfg.getint("UPLOAD", "workers")
     retry_limit = cfg.getint("UPLOAD", "retry")
+    rate_limit = cfg.getint("UPLOAD", "rate_limit")
 
-    log_dir = cfg.get("PATH", "log_dir")
-
-    state_dir = cfg.get("PATH", "state_dir")
-
-    failed_dir = cfg.get("PATH", "failed_dir")
+    log_dir = resolve_runtime_path(cfg.get("PATH", "log_dir"))
+    state_dir = resolve_runtime_path(cfg.get("PATH", "state_dir"))
+    failed_dir = resolve_runtime_path(cfg.get("PATH", "failed_dir"))
 
     requested_scan_workers = cfg.getint("SCAN", "scan_workers", fallback=4)
-    scan_workers = resolve_scan_workers(requested_scan_workers)
+    if source_type == MODE_LOCAL:
+        scan_workers = resolve_scan_workers(requested_scan_workers)
+    else:
+        scan_workers = resolve_remote_scan_workers(requested_scan_workers)
 
     enable_head = cfg.getboolean("CHECK", "enable_head_check", fallback=True)
-
     strict_check = cfg.getboolean("CHECK", "strict_client_check", fallback=True)
-
     enable_etag = cfg.getboolean("CHECK", "enable_etag_check", fallback=False)
 
-    # ================= 新增目录 =================
-    report_dir = os.path.join(os.getcwd(), "check_report")
+    report_dir = resolve_runtime_path("./check_report")
     os.makedirs(report_dir, exist_ok=True)
 
-    log_file = build_log_file(log_dir, local_dir)
-
+    log_file = build_log_file(log_dir, source_label)
     setup_logger(log_file)
-
     logging.getLogger().propagate = False
 
     if scan_workers != requested_scan_workers:
+        if source_type == MODE_LOCAL:
+            adjust_reason = f"本地扫描按 CPU 自适应限流（当前上限 {scan_workers}）"
+        else:
+            adjust_reason = f"远端扫描线程上限为 {scan_workers}"
         print(
-            f"\n⚠️ 扫描线程配置过高，已从 {requested_scan_workers} 自动调整为 {scan_workers}\n"
+            f"\n⚠️ 扫描线程配置过高，已从 {requested_scan_workers} 自动调整为 {scan_workers}（{adjust_reason}）\n"
         )
         logging.warning(
-            "[SCAN] requested workers=%s is too high for local scanning, using %s",
+            "[SCAN] requested workers=%s adjusted to %s for source_type=%s reason=%s",
             requested_scan_workers,
             scan_workers,
+            source_type,
+            adjust_reason,
         )
 
     db_path = os.path.join(state_dir, "tasks.db")
-
     checkpoint = Checkpoint(db_path)
     checkpoint.reset_obs_index()
 
+    is_local_single_file = source_type == MODE_LOCAL and os.path.isfile(source_path)
     progress = Progress()
+    task_queue = queue.Queue(maxsize=cfg.getint("SCAN", "queue_size"))
+    scan_controller = None
+    if not is_local_single_file and scan_workers > 1:
+        scan_controller = AdaptiveScanController(
+            task_queue,
+            max_workers=scan_workers,
+            min_workers=resolve_min_scan_workers(scan_workers),
+        )
 
-    task_queue = queue.Queue(
-        maxsize=cfg.getint("SCAN", "queue_size")
-    )
-
-    rate_limit = cfg.getint("UPLOAD", "rate_limit")
-
-    init_uploader(
-        ak,
-        sk,
-        cfg.get("OBS", "endpoint"),
-        cfg.get("OBS", "bucket"),
+    init_target(
+        target_type,
         parse_size(cfg.get("UPLOAD", "part_size")),
         parse_size(cfg.get("UPLOAD", "multipart_threshold")),
-        rate_limit
+        rate_limit=rate_limit,
+        ak=target_ak,
+        sk=target_sk,
+        endpoint=target_endpoint,
+        bucket=target_bucket,
+        path=target_path,
+        prefix=target_prefix,
+    )
+    init_source_client(
+        source_ak,
+        source_sk,
+        source_endpoint,
+        source_bucket,
     )
 
-    # ================= 新增 =================
-    reporter = Reporter(report_dir, local_dir)
-
-    bucket = cfg.get("OBS", "bucket")
-
-
-    # ================= 原逻辑 =================
+    reporter = Reporter(report_dir, source_label)
     uploader = OBSUploader(
         progress,
         checkpoint,
@@ -644,23 +982,25 @@ def main():
         enable_etag_check=enable_etag,
         retry_limit=retry_limit,
     )
-
-    scheduler = Scheduler(
-        task_queue,
-        uploader,
-        workers=workers
-    )
+    scheduler = Scheduler(task_queue, uploader, workers=workers)
 
     pipeline_status = {
-        "index": "pending",
-        "scan": "pending" if not os.path.isfile(local_dir) else "n/a",
+        "index": "pending" if target_type == MODE_S3 else "n/a",
+        "scan": "n/a" if is_local_single_file else "pending",
     }
     pipeline_status_lock = threading.Lock()
+    interrupted = False
 
+    # ================================
+    # 更新流水线状态
+    # ================================
     def set_status(name, value):
         with pipeline_status_lock:
             pipeline_status[name] = value
 
+    # ================================
+    # 获取流水线状态快照
+    # ================================
     def get_status():
         with pipeline_status_lock:
             return dict(pipeline_status)
@@ -673,17 +1013,25 @@ def main():
         enabled=should_enable_dashboard(cfg),
         force_terminal=should_force_terminal(),
         status_provider=get_status,
+        scan_controller=scan_controller,
     )
 
+    # ================================
+    # 构建目标端对象索引
+    # ================================
     def run_index():
+        if target_type != MODE_S3:
+            set_status("index", "n/a")
+            return
+
         set_status("index", "running")
         try:
             build_obs_index(
-                ak,
-                sk,
-                cfg.get("OBS", "endpoint"),
-                bucket,
-                obs_prefix,
+                target_ak,
+                target_sk,
+                target_endpoint,
+                target_bucket,
+                target_prefix,
                 checkpoint,
             )
         except Exception:
@@ -692,53 +1040,59 @@ def main():
         else:
             set_status("index", "done")
 
-    index_thread = threading.Thread(target=run_index, daemon=True)
-
+    index_thread = threading.Thread(target=run_index, daemon=True) if target_type == MODE_S3 else None
     scan_thread = None
     scan_done_event = threading.Event()
 
+    # ================================
+    # 启动索引、扫描与上传流程
+    # ================================
     def start_work():
-
         nonlocal scan_thread
 
         progress.start()
         scheduler.start()
-        index_thread.start()
+        if index_thread is not None:
+            index_thread.start()
 
-        if os.path.isfile(local_dir):
-
-            st = os.stat(local_dir)
-
-            filename = os.path.basename(local_dir)
-
-            obs_key = "/".join(
-                filter(None, [obs_prefix.strip("/"), filename])
+        if is_local_single_file:
+            st = os.stat(source_path)
+            filename = os.path.basename(source_path)
+            if hasattr(reporter, "track_task"):
+                reporter.track_task(
+                    source_path,
+                    size=st.st_size,
+                )
+            task_queue.put(
+                {
+                    "source_type": MODE_LOCAL,
+                    "local": source_path,
+                    "source_path": source_path,
+                    "relative_path": filename,
+                    "size": st.st_size,
+                    "mtime": st.st_mtime,
+                }
             )
-
-            task = {
-                "local": local_dir,
-                "obs": obs_key,
-                "size": st.st_size
-            }
-
             progress.add_total(st.st_size)
             scan_done_event.set()
-            task_queue.put(task)
+            return
 
-        else:
-
-            def run_scan():
+        if source_type == MODE_LOCAL:
+            # ================================
+            # 执行本地目录扫描
+            # ================================
+            def run_local_scan():
                 set_status("scan", "running")
                 try:
                     scan_directory(
-                        local_dir,
-                        obs_prefix,
+                        source_path,
                         task_queue,
                         progress,
                         checkpoint,
                         reporter,
                         scan_workers,
                         scan_done_event,
+                        scan_controller=scan_controller,
                     )
                 except Exception:
                     set_status("scan", "error")
@@ -747,39 +1101,59 @@ def main():
                 else:
                     set_status("scan", "done")
 
-            scan_thread = threading.Thread(
-                target=run_scan,
-                daemon=True
-            )
-
+            scan_thread = threading.Thread(target=run_local_scan, daemon=True)
             scan_thread.start()
+            return
+
+        # ================================
+        # 执行对象存储扫描
+        # ================================
+        def run_s3_scan():
+            set_status("scan", "running")
+            try:
+                scan_s3_objects(
+                    uploader_module._source_client,
+                    source_bucket,
+                    source_prefix,
+                    task_queue,
+                    progress,
+                    reporter,
+                    scan_workers=scan_workers,
+                    scan_done_event=scan_done_event,
+                    source_scheme=uploader_module._source_uri_scheme,
+                    scan_controller=scan_controller,
+                )
+            except Exception:
+                set_status("scan", "error")
+                scan_done_event.set()
+                raise
+            else:
+                set_status("scan", "done")
+
+        scan_thread = threading.Thread(target=run_s3_scan, daemon=True)
+        scan_thread.start()
 
     try:
+        logging.info("Task Started. Log: %s", log_file)
 
-        logging.info(f"Task Started. Log: {log_file}")
-
+        # ================================
+        # 判断整体任务是否完成
+        # ================================
         def work_finished():
-
-            if os.path.isfile(local_dir):
+            if is_local_single_file:
                 return task_queue.unfinished_tasks == 0
 
-            return (
-                scan_done_event.is_set() and
-                task_queue.unfinished_tasks == 0
-            )
+            return scan_done_event.is_set() and task_queue.unfinished_tasks == 0
 
         dashboard.run_until(
             work_finished,
             poll_interval=0.2,
             start_fn=start_work,
         )
-
     except KeyboardInterrupt:
-
+        interrupted = True
         logging.warning("用户手动停止任务")
-
     finally:
-
         if scan_thread is not None:
             scan_thread.join(timeout=5)
 
@@ -787,8 +1161,10 @@ def main():
         progress.stop()
         checkpoint.close()
         dashboard.stop()
-
-        reporter.close()
+        reporter.close(
+            pending_status="INTERRUPTED" if interrupted else None,
+            pending_message="detected_but_not_migrated",
+        )
 
         print("\n" + "=" * 50)
         print("✨ 任务结束")
@@ -797,6 +1173,6 @@ def main():
         print("对比报告:", reporter.file)
         print("=" * 50)
 
-if __name__ == "__main__":
 
+if __name__ == "__main__":
     main()

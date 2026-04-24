@@ -1,10 +1,13 @@
 # core/utils.py
 # -*- coding: utf-8 -*-
+"""提供路径、哈希、Endpoint 与编码处理等通用工具函数。"""
 
 import os
 import logging
 import re
 import hashlib
+from datetime import datetime
+from urllib.parse import urlparse
 
 
 # ================================
@@ -66,6 +69,9 @@ def setup_logger(log_file):
 # 编码自动恢复
 # ================================
 
+# ================================
+# 安全解码
+# ================================
 def safe_decode(b):
 
     if isinstance(b, str):
@@ -82,6 +88,9 @@ def safe_decode(b):
     return b.decode("utf-8", "ignore")
 
 
+# ================================
+# 安全路径转换
+# ================================
 def safe_path(p):
 
     if isinstance(p, bytes):
@@ -123,6 +132,9 @@ def fix_windows_path(p):
 
     return p
 
+# ================================
+# 路径转 UTF-8
+# ================================
 def clean_path_to_utf8(p):
 
     if isinstance(p, str):
@@ -139,6 +151,9 @@ def clean_path_to_utf8(p):
     return raw.decode("utf-8", "replace")
 
 
+# ================================
+# 清洗对象 key
+# ================================
 def sanitize_key(key):
 
     if isinstance(key, bytes):
@@ -156,6 +171,119 @@ def sanitize_key(key):
 
     return key
 
+
+# ================================
+# 归一化 Endpoint
+# ================================
+def normalize_endpoint(endpoint):
+
+    text = (endpoint or "").strip()
+    if not text:
+        return ""
+
+    parsed = urlparse(text if "://" in text else f"https://{text}")
+    host = (parsed.netloc or parsed.path or "").strip().lower()
+    if ":" in host:
+        host = host.split(":", 1)[0]
+
+    return host
+
+
+# ================================
+# 检测存储协议类型
+# ================================
+def detect_storage_scheme(endpoint="", fallback="s3"):
+
+    host = normalize_endpoint(endpoint)
+    if not host:
+        return fallback
+
+    if (
+        host.startswith("obs.")
+        or ".obs." in host
+        or host.endswith(".myhuaweicloud.com")
+    ):
+        return "obs"
+
+    if (
+        host.startswith("oss-")
+        or ".oss-" in host
+        or host.endswith(".aliyuncs.com")
+    ):
+        return "oss"
+
+    if (
+        host == "storage.googleapis.com"
+        or host.endswith(".storage.googleapis.com")
+    ):
+        return "gs"
+
+    if host.endswith(".blob.core.windows.net"):
+        return "azblob"
+
+    return fallback
+
+
+# ================================
+# 构建对象 URI
+# ================================
+def build_object_uri(bucket, key="", scheme="s3"):
+
+    normalized_scheme = (scheme or "s3").strip().lower() or "s3"
+    normalized_bucket = (bucket or "").strip()
+    normalized_key = sanitize_key(normalize_obs_key(key or "")).strip("/")
+
+    if normalized_key:
+        return f"{normalized_scheme}://{normalized_bucket}/{normalized_key}"
+
+    return f"{normalized_scheme}://{normalized_bucket}"
+
+
+# ================================
+# 转换时间戳
+# ================================
+def to_unix_timestamp(value):
+
+    if value is None:
+        return 0.0
+
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    if isinstance(value, datetime):
+        return value.timestamp()
+
+    if hasattr(value, "timestamp") and callable(value.timestamp):
+        try:
+            return float(value.timestamp())
+        except Exception:
+            pass
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return 0.0
+
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            pass
+
+        for fmt in (
+            "%Y-%m-%d %H:%M:%S",
+            "%Y/%m/%d %H:%M:%S",
+            "%a, %d %b %Y %H:%M:%S GMT",
+        ):
+            try:
+                return datetime.strptime(text, fmt).timestamp()
+            except Exception:
+                pass
+
+    return 0.0
+
+# ================================
+# 安全日志输出
+# ================================
 def safe_log(s):
 
     if isinstance(s, bytes):
@@ -173,6 +301,9 @@ def safe_log(s):
 WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
 
 
+# ================================
+# 归一化相对路径
+# ================================
 def normalize_relative_path(relative_bytes):
     r"""
     统一相对路径（核心函数）

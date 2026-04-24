@@ -1,0 +1,29 @@
+# Local secrets
+config.ini
+.config.key
+config.local.ini
+*.local.ini
+
+# Runtime outputs
+logs/
+state/
+failed/
+check_report/
+core/state/
+
+# Python caches
+__pycache__/
+*/__pycache__/
+*.py[cod]
+
+# Local temp/test artifacts
+.tmp_test/
+.tmp_bundle*/
+_ut_tmp/
+manual_py_test/
+test_write_dir/
+
+# Offline packaging artifacts
+vendor/
+dist/
+build/

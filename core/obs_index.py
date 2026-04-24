@@ -1,8 +1,15 @@
+# core/obs_index.py
+# -*- coding: utf-8 -*-
+"""构建并缓存目标端对象索引，用于快速跳过已存在对象。"""
+
 import logging
 
 from obs import ObsClient
 
 
+# ================================
+# 构建对象索引
+# ================================
 def build_obs_index(ak, sk, endpoint, bucket, prefix, checkpoint):
     client = ObsClient(
         access_key_id=ak,
