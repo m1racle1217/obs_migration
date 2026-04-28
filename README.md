@@ -798,9 +798,3 @@ README.md                # 项目说明
 - `OFFLINE_DEPLOY.md`：离线部署详解
 - `build_offline_bundle.py`：离线发布目录构建脚本
 - `bootstrap_runtime.py`：本地 `vendor` 依赖自动加载入口
-如果你已经在用 `rclone`，这个项目当前更偏向：
-
-如果你还想继续，我下一步可以帮你把 `OFFLINE_DEPLOY.md` 也同步成同一套 emoji 风格。  
-- 更贴近 OBS 场景优化
-- 更偏工程化的迁移报告与断点控制
-- 更容易按你的环境继续做定制开发
