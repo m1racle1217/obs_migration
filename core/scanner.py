@@ -27,8 +27,8 @@ IGNORE_FILES = (
 # ================================
 # 扫描本地目录
 # ================================
-def scan_directory(
-    root_dir,
+def _scan_local_entries(
+    entries,
     task_queue,
     progress,
     checkpoint,
@@ -37,17 +37,29 @@ def scan_directory(
     scan_done_event=None,
     scan_controller=None,
 ):
-    root_dir_bytes = os.fsencode(root_dir)
     stop_token = object()
 
-    logging.info("[SCAN] scanning local path=%s (workers=%s)", root_dir, scan_workers)
+    logging.info(
+        "[SCAN] scanning local entries=%s (workers=%s)",
+        len(entries),
+        scan_workers,
+    )
 
     start_time = time.time()
-    dir_queue = queue.Queue()
-    dir_queue.put(root_dir_bytes)
+    scan_queue = queue.Queue()
 
     total_scanned = 0
     scanned_lock = threading.Lock()
+
+    # ================================
+    # 计算相对路径
+    # ================================
+    def build_relative_path(local_path_bytes, base_dir_bytes):
+        try:
+            relative_bytes = os.path.relpath(local_path_bytes, base_dir_bytes)
+        except Exception:
+            relative_bytes = local_path_bytes
+        return normalize_relative_path(relative_bytes)
 
     # ================================
     # 记录扫描跳过项
@@ -69,103 +81,117 @@ def scan_directory(
             pass
 
     # ================================
+    # 处理单个文件
+    # ================================
+    def handle_file(local_path_bytes, base_dir_bytes):
+        nonlocal total_scanned
+
+        clean_name = clean_path_to_utf8(os.path.basename(local_path_bytes))
+
+        if clean_name in IGNORE_FILES:
+            report_skip(local_path_bytes, f"ignore_file({clean_name})")
+            return
+
+        if clean_name.startswith("."):
+            report_skip(local_path_bytes, "hidden_file")
+            return
+
+        for suffix in IGNORE_SUFFIX:
+            if clean_name.endswith(suffix):
+                report_skip(local_path_bytes, f"ignore_suffix({suffix})")
+                return
+
+        stat_result = os.stat(local_path_bytes)
+        size = stat_result.st_size
+        source_path = clean_path_to_utf8(local_path_bytes)
+        relative_path = build_relative_path(local_path_bytes, base_dir_bytes)
+
+        task_queue.put(
+            {
+                "source_type": "local",
+                "local": local_path_bytes,
+                "source_path": source_path,
+                "relative_path": relative_path,
+                "size": size,
+                "mtime": stat_result.st_mtime,
+            }
+        )
+        if reporter is not None and hasattr(reporter, "track_task"):
+            reporter.track_task(source_path, size=size)
+
+        progress.record_scan_file(size)
+
+        with scanned_lock:
+            total_scanned += 1
+            if total_scanned % SCAN_BATCH == 0:
+                logging.info("[SCAN] scanned %s local files", total_scanned)
+
+    # ================================
     # 执行目录扫描工作线程
     # ================================
     def worker():
-        nonlocal total_scanned
-
         while True:
             if scan_controller is not None and not scan_controller.acquire_slot():
                 return
 
-            current_dir_bytes = dir_queue.get()
+            current_item = scan_queue.get()
 
-            if current_dir_bytes is stop_token:
+            if current_item is stop_token:
                 if scan_controller is not None:
                     scan_controller.release_slot()
-                dir_queue.task_done()
+                scan_queue.task_done()
                 return
 
+            item_type, current_path_bytes, base_dir_bytes = current_item
             progress.scan_worker_started()
 
             try:
-                with os.scandir(current_dir_bytes) as dir_iterator:
-                    for entry in dir_iterator:
-                        try:
-                            if entry.is_dir(follow_symlinks=False):
-                                dir_queue.put(entry.path)
-                                continue
+                if item_type == "file":
+                    handle_file(current_path_bytes, base_dir_bytes)
+                else:
+                    with os.scandir(current_path_bytes) as dir_iterator:
+                        for entry in dir_iterator:
+                            try:
+                                if entry.is_dir(follow_symlinks=False):
+                                    scan_queue.put(("dir", entry.path, base_dir_bytes))
+                                    continue
 
-                            if not entry.is_file():
-                                continue
+                                if not entry.is_file():
+                                    continue
 
-                            clean_name = clean_path_to_utf8(entry.name)
-
-                            if clean_name in IGNORE_FILES:
-                                report_skip(entry.path, f"ignore_file({clean_name})")
-                                continue
-
-                            if clean_name.startswith("."):
-                                report_skip(entry.path, "hidden_file")
-                                continue
-
-                            hit_suffix = False
-                            for suffix in IGNORE_SUFFIX:
-                                if clean_name.endswith(suffix):
-                                    report_skip(entry.path, f"ignore_suffix({suffix})")
-                                    hit_suffix = True
-                                    break
-                            if hit_suffix:
-                                continue
-
-                            local_path_bytes = entry.path
-                            relative_bytes = local_path_bytes[len(root_dir_bytes):].lstrip(b"/\\")
-                            relative_path = normalize_relative_path(relative_bytes)
-
-                            st = entry.stat()
-                            size = st.st_size
-
-                            task_queue.put(
-                                {
-                                    "source_type": "local",
-                                    "local": local_path_bytes,
-                                    "source_path": clean_path_to_utf8(local_path_bytes),
-                                    "relative_path": relative_path,
-                                    "size": size,
-                                    "mtime": st.st_mtime,
-                                }
-                            )
-                            if reporter is not None and hasattr(reporter, "track_task"):
-                                reporter.track_task(
-                                    clean_path_to_utf8(local_path_bytes),
-                                    size=size,
+                                handle_file(entry.path, base_dir_bytes)
+                            except Exception as inner_error:
+                                progress.scan_error_inc()
+                                report_skip(entry.path, f"scan_error({str(inner_error)[:30]})")
+                                logging.error(
+                                    "[SCAN][FILE_ERROR] %s [%s]",
+                                    safe_log(entry.path),
+                                    inner_error,
                                 )
-
-                            progress.record_scan_file(size)
-
-                            with scanned_lock:
-                                total_scanned += 1
-                                if total_scanned % SCAN_BATCH == 0:
-                                    logging.info("[SCAN] scanned %s local files", total_scanned)
-                        except Exception as inner_error:
-                            progress.scan_error_inc()
-                            report_skip(entry.path, f"scan_error({str(inner_error)[:30]})")
-                            logging.error(
-                                "[SCAN][FILE_ERROR] %s [%s]",
-                                safe_log(entry.path),
-                                inner_error,
-                            )
             except Exception as outer_error:
                 logging.error(
-                    "[SCAN][DIR_ERROR] %s [%s]",
-                    safe_log(current_dir_bytes),
+                    "[SCAN][ENTRY_ERROR] %s [%s]",
+                    safe_log(current_path_bytes),
                     outer_error,
                 )
             finally:
                 progress.scan_worker_finished()
-                dir_queue.task_done()
+                scan_queue.task_done()
                 if scan_controller is not None:
                     scan_controller.release_slot()
+
+    for entry in entries:
+        path_value = entry.get("path")
+        base_dir_value = entry.get("base_dir") or path_value
+        item_type = entry.get("type") or "dir"
+
+        scan_queue.put(
+            (
+                item_type,
+                os.fsencode(path_value),
+                os.fsencode(base_dir_value),
+            )
+        )
 
     threads = []
     for _ in range(scan_workers):
@@ -173,7 +199,7 @@ def scan_directory(
         thread.start()
         threads.append(thread)
 
-    dir_queue.join()
+    scan_queue.join()
 
     if scan_done_event is not None:
         scan_done_event.set()
@@ -182,7 +208,7 @@ def scan_directory(
         scan_controller.stop()
 
     for _ in range(scan_workers):
-        dir_queue.put(stop_token)
+        scan_queue.put(stop_token)
 
     for thread in threads:
         thread.join()
@@ -193,4 +219,58 @@ def scan_directory(
         total_scanned,
         elapsed_time,
         total_scanned / elapsed_time,
+    )
+
+
+# ================================
+# 扫描本地目录
+# ================================
+def scan_directory(
+    root_dir,
+    task_queue,
+    progress,
+    checkpoint,
+    reporter=None,
+    scan_workers=4,
+    scan_done_event=None,
+    scan_controller=None,
+    base_dir=None,
+):
+    root_dir = root_dir or ""
+    effective_base_dir = base_dir or root_dir
+    logging.info("[SCAN] scanning local path=%s (workers=%s)", root_dir, scan_workers)
+    return _scan_local_entries(
+        [{"type": "dir", "path": root_dir, "base_dir": effective_base_dir}],
+        task_queue,
+        progress,
+        checkpoint,
+        reporter=reporter,
+        scan_workers=scan_workers,
+        scan_done_event=scan_done_event,
+        scan_controller=scan_controller,
+    )
+
+
+# ================================
+# 扫描多组本地源
+# ================================
+def scan_local_sources(
+    entries,
+    task_queue,
+    progress,
+    checkpoint,
+    reporter=None,
+    scan_workers=4,
+    scan_done_event=None,
+    scan_controller=None,
+):
+    return _scan_local_entries(
+        entries,
+        task_queue,
+        progress,
+        checkpoint,
+        reporter=reporter,
+        scan_workers=scan_workers,
+        scan_done_event=scan_done_event,
+        scan_controller=scan_controller,
     )

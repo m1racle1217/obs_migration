@@ -4,6 +4,7 @@
 
 import threading
 import time
+from collections import deque
 
 
 # ================================
@@ -12,13 +13,15 @@ import time
 class Progress:
     """集中维护扫描、上传、缓存命中等运行期指标。"""
 
+    RECENT_UPLOAD_WINDOW = 5.0
+
     # ================================
     # 初始化进度状态
     # ================================
     def __init__(self):
-
         self.total_bytes = 0
         self.done_bytes = 0
+        self.uploaded_bytes = 0
 
         self.files_done = 0
         self.files_skip = 0
@@ -34,6 +37,9 @@ class Progress:
         self.cache_hit = 0
         self.cache_total = 0
 
+        self._upload_events = deque()
+        self._recent_upload_bytes = 0
+
         self.lock = threading.Lock()
         self.running = False
 
@@ -41,21 +47,18 @@ class Progress:
     # 标记开始
     # ================================
     def start(self):
-
         self.running = True
 
     # ================================
     # 标记停止
     # ================================
     def stop(self):
-
         self.running = False
 
     # ================================
     # 增加总量
     # ================================
     def add_total(self, size):
-
         with self.lock:
             self.total_bytes += size
 
@@ -63,16 +66,29 @@ class Progress:
     # 增加完成量
     # ================================
     def add_done(self, size):
-
         with self.lock:
             self.done_bytes += size
             self.files_done += 1
 
     # ================================
+    # 记录真实上传字节
+    # ================================
+    def record_upload_bytes(self, size):
+        delta = max(int(size or 0), 0)
+        if delta <= 0:
+            return
+
+        now = time.time()
+        with self.lock:
+            self.uploaded_bytes += delta
+            self._upload_events.append((now, delta))
+            self._recent_upload_bytes += delta
+            self._purge_upload_events_locked(now)
+
+    # ================================
     # 记录跳过文件
     # ================================
     def skip(self):
-
         with self.lock:
             self.files_skip += 1
 
@@ -80,7 +96,6 @@ class Progress:
     # 增加扫描跳过数
     # ================================
     def scan_skip_inc(self, n=1):
-
         with self.lock:
             self.scan_skip += n
 
@@ -88,7 +103,6 @@ class Progress:
     # 增加扫描错误数
     # ================================
     def scan_error_inc(self, n=1):
-
         with self.lock:
             self.scan_errors += n
 
@@ -96,7 +110,6 @@ class Progress:
     # 标记扫描线程开始
     # ================================
     def scan_worker_started(self):
-
         with self.lock:
             self.scan_active_workers += 1
 
@@ -104,7 +117,6 @@ class Progress:
     # 标记扫描线程结束
     # ================================
     def scan_worker_finished(self):
-
         with self.lock:
             if self.scan_active_workers > 0:
                 self.scan_active_workers -= 1
@@ -113,7 +125,6 @@ class Progress:
     # 增加上传错误数
     # ================================
     def upload_error_inc(self, n=1):
-
         with self.lock:
             self.upload_errors += n
 
@@ -121,7 +132,6 @@ class Progress:
     # 记录扫描到的文件
     # ================================
     def record_scan_file(self, size):
-
         with self.lock:
             self.total_bytes += size
             self.scan_files += 1
@@ -130,7 +140,6 @@ class Progress:
     # 记录缓存命中
     # ================================
     def cache_hit_inc(self):
-
         with self.lock:
             self.cache_hit += 1
             self.cache_total += 1
@@ -139,19 +148,37 @@ class Progress:
     # 记录缓存未命中
     # ================================
     def cache_miss_inc(self):
-
         with self.lock:
             self.cache_total += 1
+
+    # ================================
+    # 清理过期上传事件
+    # ================================
+    def _purge_upload_events_locked(self, now=None):
+        current = time.time() if now is None else now
+        cutoff = current - self.RECENT_UPLOAD_WINDOW
+        while self._upload_events and self._upload_events[0][0] < cutoff:
+            _, delta = self._upload_events.popleft()
+            self._recent_upload_bytes -= delta
+        if self._recent_upload_bytes < 0:
+            self._recent_upload_bytes = 0
 
     # ================================
     # 获取进度快照
     # ================================
     def snapshot(self):
-
         with self.lock:
+            now = time.time()
+            self._purge_upload_events_locked(now)
             return {
                 "total_bytes": self.total_bytes,
                 "done_bytes": self.done_bytes,
+                "uploaded_bytes": self.uploaded_bytes,
+                "recent_upload_bytes": self._recent_upload_bytes,
+                "recent_upload_window": min(
+                    self.RECENT_UPLOAD_WINDOW,
+                    max(now - self.start_time, 0.001),
+                ),
                 "files_done": self.files_done,
                 "files_skip": self.files_skip,
                 "scan_files": self.scan_files,

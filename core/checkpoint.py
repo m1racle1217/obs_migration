@@ -11,12 +11,12 @@ import threading
 # 管理断点与目标索引
 # ================================
 class Checkpoint:
-    """使用 SQLite 保存已完成任务与目标端对象元数据。"""
+    """使用 SQLite 保存已实现任务与目标端对象元数据。"""
 
     # ================================
     # 初始化断点管理器
     # ================================
-    def __init__(self, db_path, batch_size=500):
+    def __init__(self, db_path, batch_size=500, obs_index_batch_size=20000):
         self.obs_index_ready = False
 
         dir_path = os.path.dirname(db_path)
@@ -32,10 +32,11 @@ class Checkpoint:
         self.cache = {}
         self.batch = []
         self.batch_size = batch_size
+        self.obs_batch = []
+        self.obs_index_batch_size = max(int(obs_index_batch_size or 20000), 1000)
 
         self._init_db()
         self.load_index_flag()
-        self._load_cache()
 
     # ================================
     # 初始化数据库结构
@@ -47,6 +48,12 @@ class Checkpoint:
 
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA synchronous=NORMAL")
+            try:
+                cursor.execute("PRAGMA temp_store=MEMORY")
+                cursor.execute("PRAGMA cache_size=-65536")
+                cursor.execute("PRAGMA mmap_size=268435456")
+            except Exception:
+                pass
 
             cursor.execute(
                 """
@@ -90,6 +97,7 @@ class Checkpoint:
     def set_index_ready(self):
 
         with self.lock:
+            self._flush_obs_index_locked()
             self.conn.execute(
                 "INSERT OR REPLACE INTO meta(key,value) VALUES('obs_index_ready','1')"
             )
@@ -114,7 +122,20 @@ class Checkpoint:
     def reset_obs_index(self):
 
         with self.lock:
-            self.conn.execute("DELETE FROM obs_objects")
+            self.obs_batch.clear()
+            self.conn.execute("DROP TABLE IF EXISTS obs_objects")
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS obs_objects (
+                    key TEXT PRIMARY KEY,
+                    size INTEGER,
+                    etag TEXT
+                )
+                """
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_obs_key ON obs_objects(key)"
+            )
             self.conn.execute(
                 "INSERT OR REPLACE INTO meta(key,value) VALUES('obs_index_ready','0')"
             )
@@ -137,11 +158,9 @@ class Checkpoint:
             return
 
         with self.lock:
-            self.conn.executemany(
-                "INSERT OR REPLACE INTO obs_objects(key,size,etag) VALUES(?,?,?)",
-                rows,
-            )
-            self.conn.commit()
+            self.obs_batch.extend(rows)
+            if len(self.obs_batch) >= self.obs_index_batch_size:
+                self._flush_obs_index_locked()
 
     # ================================
     # 查询对象索引
@@ -156,26 +175,29 @@ class Checkpoint:
             return cursor.fetchone()
 
     # ================================
-    # 预加载完成缓存
+    # 刷新对象索引批次
     # ================================
-    def _load_cache(self):
+    def flush_obs_index(self):
 
         with self.lock:
-            rows = self.conn.execute(
-                "SELECT path,size,mtime FROM completed"
-            ).fetchall()
-
-        for path, size, mtime in rows:
-            self.cache[path] = (size, mtime)
+            self._flush_obs_index_locked()
 
     # ================================
-    # 判断任务是否已完成
+    # 预加载完成缓存
     # ================================
     def is_done(self, path, size, mtime):
-
-        rec = self.cache.get(self._normalize_path(path))
+        safe = self._normalize_path(path)
+        rec = self.cache.get(safe)
         if not rec:
-            return False
+            with self.lock:
+                row = self.conn.execute(
+                    "SELECT size,mtime FROM completed WHERE path=?",
+                    (safe,),
+                ).fetchone()
+            if not row:
+                return False
+            rec = (row[0], row[1])
+            self.cache[safe] = rec
 
         old_size, old_mtime = rec
         return old_size == size and old_mtime == mtime
@@ -227,10 +249,26 @@ class Checkpoint:
         self.batch.clear()
 
     # ================================
+    # 刷新对象索引批次
+    # ================================
+    def _flush_obs_index_locked(self):
+
+        if not self.obs_batch:
+            return
+
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO obs_objects(key,size,etag) VALUES(?,?,?)",
+            self.obs_batch,
+        )
+        self.conn.commit()
+        self.obs_batch.clear()
+
+    # ================================
     # 关闭数据库连接
     # ================================
     def close(self):
 
         with self.lock:
+            self._flush_obs_index_locked()
             self._flush_completed_locked()
             self.conn.close()

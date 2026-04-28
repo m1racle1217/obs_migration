@@ -1,5 +1,6 @@
 """测试迁移核心组件与命令行辅助逻辑。"""
 
+import configparser
 import csv
 import io
 import json
@@ -24,7 +25,7 @@ from core.progress import Progress
 from core.report import Reporter
 from core.scan_control import AdaptiveScanController
 from core.s3_scanner import scan_s3_objects
-from core.scanner import scan_directory
+from core.scanner import scan_directory, scan_local_sources
 from core.uploader import OBSUploader
 from core.utils import build_object_uri, detect_storage_scheme
 
@@ -318,6 +319,73 @@ class ScannerTests(unittest.TestCase):
                     str(root / "file.txt"),
                     str(root / "sub" / "nested.bin"),
                 ]),
+            )
+
+    # ================================
+    # 验证本地通配符会保留静态根目录
+    # ================================
+    def test_build_local_source_plan_preserves_static_root_for_glob(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            attachments = root / "attachments"
+            (attachments / "20260401").mkdir(parents=True)
+            (attachments / "20260402").mkdir(parents=True)
+
+            pattern = str(attachments / "202604*")
+            plan = obs_migrate.build_local_source_plan(pattern)
+
+            self.assertTrue(plan["has_glob"])
+            self.assertEqual(
+                os.path.normpath(plan["base_dir"]),
+                os.path.normpath(str(attachments)),
+            )
+            self.assertEqual(plan["match_count"], 2)
+            self.assertEqual(
+                sorted((item["type"], os.path.normpath(item["path"])) for item in plan["entries"]),
+                [
+                    ("dir", os.path.normpath(str(attachments / "20260401"))),
+                    ("dir", os.path.normpath(str(attachments / "20260402"))),
+                ],
+            )
+
+    # ================================
+    # 验证多本地源扫描会保留匹配目录名
+    # ================================
+    def test_scan_local_sources_preserve_glob_matched_root_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            attachments = root / "attachments"
+            first_dir = attachments / "20260401"
+            second_dir = attachments / "20260402"
+            first_dir.mkdir(parents=True)
+            second_dir.mkdir(parents=True)
+            (first_dir / "a.txt").write_text("a", encoding="utf-8")
+            (second_dir / "b.txt").write_text("bb", encoding="utf-8")
+
+            reporter = MemoryReporter()
+            progress = Progress()
+            task_queue = queue.Queue()
+
+            scan_local_sources(
+                [
+                    {"type": "dir", "path": str(first_dir), "base_dir": str(attachments)},
+                    {"type": "dir", "path": str(second_dir), "base_dir": str(attachments)},
+                ],
+                task_queue,
+                progress,
+                checkpoint=None,
+                reporter=reporter,
+                scan_workers=2,
+            )
+
+            tasks = []
+            while not task_queue.empty():
+                tasks.append(task_queue.get_nowait())
+
+            self.assertEqual(len(tasks), 2)
+            self.assertEqual(
+                sorted(task["relative_path"] for task in tasks),
+                ["20260401/a.txt", "20260402/b.txt"],
             )
 
     # ================================
@@ -943,6 +1011,83 @@ class UploaderTests(unittest.TestCase):
             checkpoint.close()
 
     # ================================
+    # 验证 index_only 命中索引时直接跳过 HEAD
+    # ================================
+    def test_uploader_index_only_skips_head_when_index_hits_target_key(self):
+        # ================================
+        # 模拟目标端上传客户端
+        # ================================
+        class FakeTargetClient:
+            # ================================
+            # 初始化目标端统计字段
+            # ================================
+            def __init__(self):
+                self.head_calls = 0
+                self.put_calls = 0
+
+            # ================================
+            # 模拟目标端 HEAD 请求
+            # ================================
+            def getObjectMetadata(self, bucket, key):
+                self.head_calls += 1
+                return SimpleNamespace(status=200, body=SimpleNamespace(contentLength=7, etag="etag-a"))
+
+            # ================================
+            # 模拟直接上传文件
+            # ================================
+            def putFile(self, bucket, key, local_path):
+                self.put_calls += 1
+                return SimpleNamespace(status=200)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local_file = root / "payload.txt"
+            local_file.write_text("payload", encoding="utf-8")
+
+            progress = Progress()
+            checkpoint = Checkpoint(str(root / "state" / "tasks.db"))
+            checkpoint.reset_obs_index()
+            checkpoint.upsert_obs_many([("backup/payload.txt", local_file.stat().st_size, "etag-a")])
+            checkpoint.set_index_ready()
+            fake_target = FakeTargetClient()
+
+            uploader = OBSUploader(
+                progress,
+                checkpoint,
+                failed_dir=str(root / "failed"),
+                retry_limit=2,
+                compare_mode="index_only",
+                enable_head_check=True,
+            )
+
+            with patch.object(uploader_module, "_target_type", "s3"), \
+                    patch.object(uploader_module, "_client", fake_target), \
+                    patch.object(uploader_module, "_bucket", "dst-bucket"), \
+                    patch.object(uploader_module, "_target_prefix", "backup"), \
+                    patch.object(uploader_module, "_threshold", 1024 * 1024), \
+                    patch.object(uploader_module, "_part_size", 1024 * 1024), \
+                    patch.object(uploader_module, "_limiter", None):
+                uploader.upload(
+                    {
+                        "source_type": "local",
+                        "local": str(local_file),
+                        "source_path": str(local_file),
+                        "relative_path": "payload.txt",
+                        "size": local_file.stat().st_size,
+                    }
+                )
+
+            self.assertEqual(fake_target.head_calls, 0)
+            self.assertEqual(fake_target.put_calls, 0)
+
+            snapshot = progress.snapshot()
+            self.assertEqual(snapshot["files_done"], 1)
+            self.assertEqual(snapshot["files_skip"], 1)
+            self.assertEqual(snapshot["done_bytes"], len("payload"))
+
+            checkpoint.close()
+
+    # ================================
     # 验证本地到本地复制
     # ================================
     def test_uploader_copies_local_source_to_local_target(self):
@@ -1163,6 +1308,93 @@ class EntryUiTests(unittest.TestCase):
     def test_prompt_config_action_supports_direct_index(self):
         with patch("builtins.input", side_effect=["7"]):
             self.assertEqual(obs_migrate._prompt_config_action({"7": ("SOURCE", "prefix")}), "7")
+
+    # ================================
+    # 验证顶层配置菜单为折叠视图
+    # ================================
+    def test_show_config_menu_displays_collapsed_groups(self):
+        cfg = configparser.ConfigParser()
+        for section, items in obs_migrate.DEFAULT_CONFIG.items():
+            cfg[section] = dict(items)
+
+        cfg.set("SOURCE", "type", "s3")
+        cfg.set("SOURCE", "bucket", "src-bucket")
+        cfg.set("SOURCE", "prefix", "src-prefix")
+        cfg.set("TARGET", "type", "local")
+        cfg.set("TARGET", "path", "/data/target")
+
+        with patch("sys.stdout", new=io.StringIO()) as buffer:
+            mapping = obs_migrate.show_config_menu(cfg)
+
+        output = buffer.getvalue()
+        self.assertEqual(mapping["1"], "source")
+        self.assertEqual(mapping["8"], "ui")
+        self.assertIn("配置菜单", output)
+        self.assertIn("[源端配置]", output)
+        self.assertIn("[目标端配置]", output)
+        self.assertIn("[调度器配置]", output)
+        self.assertNotIn("源端对象存储 AccessKey", output)
+        self.assertNotIn("目标端对象存储 Endpoint", output)
+
+    # ================================
+    # 验证配置展示会折叠当前模式无关项
+    # ================================
+    def test_show_config_collapses_inactive_mode_specific_options(self):
+        cfg = configparser.ConfigParser()
+        for section, items in obs_migrate.DEFAULT_CONFIG.items():
+            cfg[section] = dict(items)
+
+        cfg.set("SOURCE", "type", "s3")
+        cfg.set("TARGET", "type", "local")
+
+        with patch("sys.stdout", new=io.StringIO()) as buffer:
+            mapping = obs_migrate.show_config(cfg)
+
+        output = buffer.getvalue()
+        mapped_items = set(mapping.values())
+
+        self.assertIn("源端配置", output)
+        self.assertIn("目标端配置", output)
+        self.assertIn("当前模式：s3", output)
+        self.assertIn("当前模式：local", output)
+        self.assertIn(("SOURCE", "bucket"), mapped_items)
+        self.assertIn(("TARGET", "path"), mapped_items)
+        self.assertNotIn(("SOURCE", "path"), mapped_items)
+        self.assertNotIn(("TARGET", "endpoint"), mapped_items)
+
+    # ================================
+    # 验证分组详情展开后只显示该组配置项
+    # ================================
+    def test_show_config_group_only_expands_selected_group(self):
+        cfg = configparser.ConfigParser()
+        for section, items in obs_migrate.DEFAULT_CONFIG.items():
+            cfg[section] = dict(items)
+
+        with patch("sys.stdout", new=io.StringIO()) as buffer:
+            mapping = obs_migrate.show_config_group(cfg, "scanner")
+
+        output = buffer.getvalue()
+        mapped_items = set(mapping.values())
+
+        self.assertIn("扫描器配置", output)
+        self.assertIn(("SCAN", "scan_workers"), mapped_items)
+        self.assertIn(("SCAN", "batch_size"), mapped_items)
+        self.assertNotIn(("UPLOAD", "workers"), mapped_items)
+        self.assertNotIn("源端对象存储 AccessKey", output)
+
+    # ================================
+    # 验证折叠菜单支持直接启动
+    # ================================
+    def test_run_config_menu_can_start_directly(self):
+        cfg = configparser.ConfigParser()
+        for section, items in obs_migrate.DEFAULT_CONFIG.items():
+            cfg[section] = dict(items)
+
+        with patch("builtins.input", side_effect=["y"]), \
+                patch("sys.stdout", new=io.StringIO()):
+            result = obs_migrate.run_config_menu(cfg)
+
+        self.assertIs(result, cfg)
 
     # ================================
     # 验证根据端点识别存储协议
