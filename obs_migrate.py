@@ -103,7 +103,6 @@ CONFIG_DESC = {
     "SOURCE.type": "源端模式：local 或 s3",
     "SOURCE.selection_mode": "源端选择模式：directory 目录模式（一对一）或 list 列表模式（多目录/文件/对象）",
     "SOURCE.path": "源端本地目录、单文件路径或通配符（source.type=local 时使用，例如 /data/202604*）",
-    "SOURCE.paths": "源端列表模式路径清单，每行一个本地文件/目录，或一个源端桶内前缀/对象（SOURCE.selection_mode=list 时使用）",
     "SOURCE.ak": "源端对象存储 AccessKey（source.type=s3 时使用）",
     "SOURCE.sk": "源端对象存储 SecretKey（source.type=s3 时使用）",
     "SOURCE.endpoint": "源端对象存储 Endpoint（source.type=s3 时使用，支持 OBS / 其他 S3 兼容服务）",
@@ -141,6 +140,7 @@ CONFIG_DESC = {
     "PATH.log_dir": "日志目录（相对配置文件目录解析）",
     "PATH.state_dir": "断点数据库目录（tasks.db 会写到这里）",
     "PATH.failed_dir": "失败任务目录（失败明细 / 补偿任务）",
+    "PATH.migration_list_file": "源端列表模式清单文件（相对配置文件目录解析，默认 migration_list.txt）",
     "UI.prompt_config": "启动时是否允许交互修改配置（支持直接输入编号修改）",
     "UI.show_dashboard": "是否显示实时仪表盘",
 }
@@ -156,7 +156,7 @@ SECTION_TITLES = {
 }
 
 REMOTE_ENDPOINT_KEYS = ("ak", "sk", "endpoint", "bucket", "prefix")
-SOURCE_KEY_ORDER = ("type", "selection_mode", "path", "paths", "ak", "sk", "endpoint", "bucket", "prefix")
+SOURCE_KEY_ORDER = ("type", "selection_mode", "path", "ak", "sk", "endpoint", "bucket", "prefix")
 
 CONFIG_MENU_GROUPS = [
     {"id": "source", "title": "源端配置", "sections": [SOURCE_SECTION]},
@@ -216,7 +216,6 @@ DEFAULT_CONFIG = {
         "type": MODE_LOCAL,
         "selection_mode": SOURCE_MODE_DIRECTORY,
         "path": "",
-        "paths": "",
         "ak": "",
         "sk": "",
         "endpoint": "",
@@ -264,6 +263,7 @@ DEFAULT_CONFIG = {
         "log_dir": "./logs",
         "state_dir": "./state",
         "failed_dir": "./failed",
+        "migration_list_file": "./migration_list.txt",
     },
     "UI": {
         "prompt_config": "true",
@@ -808,13 +808,32 @@ def _prompt_mode(section_label, current_value, allow_empty=False):
     current_value = _normalize_mode(current_value, default=MODE_LOCAL)
 
     while True:
-        print(f"\n请选择 {section_label} 模式：")
-        print("1. local")
-        print("2. s3")
-        raw = _read_input(f"{section_label}.type [{current_value}]: ").strip()
+        title = "源端模式" if section_label == "source" else "目标端模式"
+        print()
+        _print_box(
+            title,
+            [
+                [
+                    ("1. ", Fore.WHITE),
+                    ("local", _bright(MENU_COLOR_MODE)),
+                    ("  本地目录 / 文件", MENU_COLOR_DESC),
+                ],
+                [
+                    ("2. ", Fore.WHITE),
+                    ("s3", _bright(MENU_COLOR_LIST)),
+                    ("     S3 / OBS 兼容对象存储", MENU_COLOR_DESC),
+                ],
+            ],
+            footer_lines=[f"当前值：{current_value}    [1] local    [2] s3    [L] local    [S] s3"],
+        )
+        raw = _read_menu_input("请选择 1/2/L/S，或回车保持当前值: ", hotkeys={"l", "s"}, max_number=2).strip()
 
         if not raw and allow_empty:
             return current_value
+        if raw.lower() == "l":
+            return MODE_LOCAL
+        if raw.lower() == "s":
+            return MODE_S3
 
         normalized = _normalize_mode(raw, default=current_value if allow_empty else None)
         if normalized in {MODE_LOCAL, MODE_S3}:
@@ -830,13 +849,31 @@ def _prompt_source_selection_mode(current_value, allow_empty=False):
     current_value = _normalize_source_selection_mode(current_value, default=SOURCE_MODE_DIRECTORY)
 
     while True:
-        print("\n请选择源端选择模式：")
-        print("1. directory（目录模式，保持当前一对一迁移）")
-        print("2. list（列表模式，可添加多个目录/文件/对象）")
-        raw = _read_input(f"SOURCE.selection_mode [{current_value}]: ").strip()
+        print()
+        _print_box(
+            "源端选择模式",
+            [
+                [
+                    ("1. ", Fore.WHITE),
+                    ("directory", _bright(MENU_COLOR_MODE)),
+                    ("  目录模式（一对一迁移）", MENU_COLOR_DESC),
+                ],
+                [
+                    ("2. ", Fore.WHITE),
+                    ("list", _bright(MENU_COLOR_LIST)),
+                    ("       列表模式（多目录/文件/对象）", MENU_COLOR_DESC),
+                ],
+            ],
+            footer_lines=[f"当前值：{current_value}    [1] directory    [2] list    [D] directory    [L] list"],
+        )
+        raw = _read_menu_input("请选择 1/2/D/L，或回车保持当前值: ", hotkeys={"d", "l"}, max_number=2).strip()
 
         if not raw and allow_empty:
             return current_value
+        if raw.lower() == "d":
+            return SOURCE_MODE_DIRECTORY
+        if raw.lower() == "l":
+            return SOURCE_MODE_LIST
 
         normalized = _normalize_source_selection_mode(raw, default=current_value if allow_empty else None)
         if normalized in {SOURCE_MODE_DIRECTORY, SOURCE_MODE_LIST}:
@@ -907,8 +944,7 @@ def _hidden_keys_for_section(cfg, section):
             )
             if source_selection_mode == SOURCE_MODE_LIST:
                 hidden.add("path")
-            else:
-                hidden.add("paths")
+            hidden.add("paths")
         return hidden
 
     if current_mode == MODE_S3:
@@ -920,8 +956,7 @@ def _hidden_keys_for_section(cfg, section):
             )
             if selection_mode == SOURCE_MODE_LIST:
                 hidden.add("prefix")
-            else:
-                hidden.add("paths")
+            hidden.add("paths")
         return hidden
 
     return set()
@@ -936,6 +971,17 @@ def _visible_items_for_section(cfg, section):
     if section != SOURCE_SECTION:
         return items
 
+    order_map = {key: index for index, key in enumerate(SOURCE_KEY_ORDER)}
+    return sorted(items, key=lambda item: (order_map.get(item[0], len(order_map)), item[0]))
+
+
+# ================================
+# 获取写回配置项顺序
+# ================================
+def _ordered_items_for_section(cfg, section):
+    items = list(cfg[section].items())
+    if section != SOURCE_SECTION:
+        return items
     order_map = {key: index for index, key in enumerate(SOURCE_KEY_ORDER)}
     return sorted(items, key=lambda item: (order_map.get(item[0], len(order_map)), item[0]))
 
@@ -1361,9 +1407,57 @@ def _save_browser_selection(cfg, section, bucket=None, prefix=None, path=None):
 
 
 # ================================
+# 获取源端列表文件路径
+# ================================
+def _source_paths_file(cfg):
+    raw_value = ""
+    if cfg.has_section("PATH"):
+        raw_value = cfg.get("PATH", "migration_list_file", fallback="").strip()
+    if not raw_value:
+        raw_value = cfg.get(SOURCE_SECTION, "paths_file", fallback="").strip()
+    if not raw_value:
+        raw_value = DEFAULT_CONFIG["PATH"]["migration_list_file"]
+    if not raw_value:
+        return ""
+    expanded = os.path.expanduser(raw_value)
+    if os.path.isabs(expanded):
+        return expanded
+    return os.path.abspath(os.path.join(config_base_dir(), expanded))
+
+
+# ================================
+# 从源端列表文件读取条目
+# ================================
+def _read_source_paths_file(file_path):
+    if not file_path or not os.path.exists(file_path):
+        return []
+    with open(file_path, "r", encoding="utf-8") as f:
+        return parse_source_path_list(f.read())
+
+
+# ================================
+# 写回源端列表文件
+# ================================
+def _write_source_paths_file(file_path, paths):
+    parent_dir = os.path.dirname(os.path.abspath(file_path))
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+    with open(file_path, "w", encoding="utf-8", newline="\n") as f:
+        content = serialize_source_path_list(paths)
+        if content:
+            f.write(content)
+            f.write("\n")
+
+
+# ================================
 # 读取源端列表
 # ================================
 def _source_path_list(cfg):
+    file_path = _source_paths_file(cfg)
+    if file_path:
+        file_paths = _read_source_paths_file(file_path)
+        if file_paths or os.path.exists(file_path):
+            return file_paths
     return parse_source_path_list(cfg.get(SOURCE_SECTION, "paths", fallback=""))
 
 
@@ -1371,7 +1465,9 @@ def _source_path_list(cfg):
 # 写回源端列表
 # ================================
 def _set_source_path_list(cfg, paths):
-    cfg[SOURCE_SECTION]["paths"] = serialize_source_path_list(paths)
+    file_path = _source_paths_file(cfg)
+    if file_path:
+        _write_source_paths_file(file_path, paths)
     write_config_with_comments(cfg)
 
 
@@ -1434,11 +1530,15 @@ def _source_path_list_lines(cfg):
 # 展示源端列表
 # ================================
 def show_source_path_list(cfg):
+    file_path = _source_paths_file(cfg)
+    subtitle_lines = ["列表模式会迁移这里的所有源端条目；本地可填文件/目录，S3 可填桶内前缀/对象。"]
+    if file_path:
+        subtitle_lines.append(f"列表文件：{_shorten_text(file_path, 74)}")
     _print_box(
         "源端列表",
         _source_path_list_lines(cfg),
         footer_lines=["[A] 添加路径    [D] 删除路径    [C] 清空列表    [B] 返回上一级"],
-        subtitle_lines=["列表模式会迁移这里的所有源端条目；本地可填文件/目录，S3 可填桶内前缀/对象。"],
+        subtitle_lines=subtitle_lines,
     )
 
 
@@ -1450,7 +1550,7 @@ def prompt_source_path_list_action(cfg):
         show_source_path_list(cfg)
         paths = _source_path_list(cfg)
         list_action = _read_menu_input(
-            "\n按 A 添加路径，D 删除路径，C 清空列表，B 返回: ",
+            "\n请选择 A/D/C/B: ",
             hotkeys={"a", "d", "c", "b"},
         ).strip().lower()
 
@@ -1897,23 +1997,32 @@ def _group_items(cfg, group_id):
         for key, value in _visible_items_for_section(cfg, section):
             rows.append((section, key, value))
 
+    if (
+        group_id == "source"
+        and cfg.has_section("PATH")
+        and get_source_selection_mode(cfg) == SOURCE_MODE_LIST
+    ):
+        rows.append(("PATH", "migration_list_file", cfg.get("PATH", "migration_list_file", fallback="")))
+
     return rows
 
 
 # ================================
 # 生成存储端简要摘要
 # ================================
-def _storage_summary(mode, path_value, endpoint, bucket, prefix, selection_mode=SOURCE_MODE_DIRECTORY, paths_value=""):
+def _storage_summary(mode, path_value, endpoint, bucket, prefix, selection_mode=SOURCE_MODE_DIRECTORY, paths_value="", paths_count=None):
     normalized_mode = _normalize_mode(mode, default=MODE_LOCAL) or MODE_LOCAL
     normalized_selection_mode = _normalize_source_selection_mode(selection_mode, default=SOURCE_MODE_DIRECTORY)
     if normalized_mode == MODE_LOCAL:
         if normalized_selection_mode == SOURCE_MODE_LIST:
-            return f"local/list | {len(parse_source_path_list(paths_value))} 项"
+            count = len(parse_source_path_list(paths_value)) if paths_count is None else paths_count
+            return f"local/list | {count} 项"
         return f"local | {_shorten_text(path_value or '-', 56)}"
 
     scheme = detect_storage_scheme(endpoint, fallback="s3")
     if normalized_selection_mode == SOURCE_MODE_LIST:
-        return f"{normalized_mode}/list | {bucket or '-'} | {len(parse_source_path_list(paths_value))} 项"
+        count = len(parse_source_path_list(paths_value)) if paths_count is None else paths_count
+        return f"{normalized_mode}/list | {bucket or '-'} | {count} 项"
     uri = build_object_uri(bucket, prefix, scheme=scheme)
     return f"{normalized_mode} | {_shorten_text(uri, 56)}"
 
@@ -1931,6 +2040,7 @@ def _group_summary(cfg, group_id):
             cfg.get(SOURCE_SECTION, "prefix", fallback=""),
             cfg.get(SOURCE_SECTION, "selection_mode", fallback=SOURCE_MODE_DIRECTORY),
             cfg.get(SOURCE_SECTION, "paths", fallback=""),
+            len(_source_path_list(cfg)),
         )
 
     if group_id == "target":
@@ -1974,7 +2084,8 @@ def _group_summary(cfg, group_id):
         return (
             f"logs={_shorten_text(cfg.get('PATH', 'log_dir', fallback='-'), 18)} | "
             f"state={_shorten_text(cfg.get('PATH', 'state_dir', fallback='-'), 18)} | "
-            f"failed={_shorten_text(cfg.get('PATH', 'failed_dir', fallback='-'), 18)}"
+            f"failed={_shorten_text(cfg.get('PATH', 'failed_dir', fallback='-'), 18)} | "
+            f"list={len(_source_path_list(cfg))} 项"
         )
 
     if group_id == "ui":
@@ -2093,12 +2204,16 @@ def show_config_group(cfg, group_id):
     for index, (section, key, value) in enumerate(_group_items(cfg, group_id), start=1):
         shown_value = mask_secret(value) if _is_sensitive(section, key) else value
         if section == SOURCE_SECTION and key == "paths":
-            paths = parse_source_path_list(value)
+            paths = _source_path_list(cfg)
             shown_value = f"{len(paths)} 项" if paths else "(空)"
+        if section == "PATH" and key == "migration_list_file":
+            shown_value = _shorten_text(_source_paths_file(cfg) or value or "(未配置)", 66)
         if key in {"rate_limit", "rate_limit_burst"} and shown_value not in {"", None}:
             shown_value = f"{shown_value} req/s"
 
         desc = CONFIG_DESC.get(f"{section}.{key}", "")
+        if group_id == "source" and section == "PATH" and key == "migration_list_file":
+            desc = "源端列表模式清单文件与列表管理（SOURCE.selection_mode=list 时使用）"
         if desc:
             body_lines.append([(f"{index}. ", Fore.WHITE), (desc, _bright(MENU_COLOR_DESC))])
             body_lines.append(
@@ -2186,6 +2301,10 @@ def edit_config_group(cfg, group_id):
             continue
 
         section, key = mapping[answer]
+        if section == "PATH" and key == "migration_list_file":
+            prompt_source_path_list_action(cfg)
+            continue
+
         desc = CONFIG_DESC.get(f"{section}.{key}", "")
         if desc:
             print(f"\n{desc}")
@@ -2198,9 +2317,6 @@ def edit_config_group(cfg, group_id):
             new_value = _prompt_mode(section_label, cfg.get(section, key, fallback=MODE_LOCAL), allow_empty=True)
         elif key == "selection_mode" and section == SOURCE_SECTION:
             new_value = _prompt_source_selection_mode(cfg.get(section, key, fallback=SOURCE_MODE_DIRECTORY), allow_empty=True)
-        elif key == "paths" and section == SOURCE_SECTION:
-            prompt_source_path_list_action(cfg)
-            continue
         else:
             new_value = _read_input("新值: ").strip()
 
@@ -2471,7 +2587,7 @@ def build_local_source_list_plan(source_paths):
 def build_local_source_plan_from_config(cfg):
     source_selection_mode = get_source_selection_mode(cfg)
     if source_selection_mode == SOURCE_MODE_LIST:
-        return build_local_source_list_plan(cfg.get(SOURCE_SECTION, "paths", fallback=""))
+        return build_local_source_list_plan(serialize_source_path_list(_source_path_list(cfg)))
     return build_local_source_plan(cfg.get(SOURCE_SECTION, "path", fallback="").strip())
 
 
@@ -2491,7 +2607,7 @@ def build_s3_source_entries_from_config(cfg):
             "bucket": source_bucket,
             "prefix": sanitize_key(item).strip("/"),
         }
-        for item in parse_source_path_list(cfg.get(SOURCE_SECTION, "paths", fallback=""))
+        for item in _source_path_list(cfg)
     ]
 
 
@@ -2605,8 +2721,10 @@ def show_config(cfg):
         for key, value in _visible_items_for_section(cfg, section):
             shown_value = mask_secret(value) if _is_sensitive(section, key) else value
             if section == SOURCE_SECTION and key == "paths":
-                paths = parse_source_path_list(value)
+                paths = _source_path_list(cfg)
                 shown_value = f"{len(paths)} 项" if paths else "(空)"
+            if section == "PATH" and key == "migration_list_file":
+                shown_value = _shorten_text(_source_paths_file(cfg) or value or "(未配置)", 66)
             if key in {"rate_limit", "rate_limit_burst"} and shown_value not in {"", None}:
                 shown_value = f"{shown_value} req/s"
 
@@ -2645,6 +2763,12 @@ def modify_config(cfg, initial_choice=None, mapping=None):
             continue
 
         section, key = mapping[choice]
+        if section == "PATH" and key == "migration_list_file":
+            prompt_source_path_list_action(cfg)
+            mapping = show_config(cfg)
+            choice = None
+            continue
+
         desc = CONFIG_DESC.get(f"{section}.{key}", "")
         if desc:
             print(desc)
@@ -2657,11 +2781,6 @@ def modify_config(cfg, initial_choice=None, mapping=None):
             new_value = _prompt_mode(section_label, cfg.get(section, key, fallback=MODE_LOCAL), allow_empty=True)
         elif key == "selection_mode" and section == SOURCE_SECTION:
             new_value = _prompt_source_selection_mode(cfg.get(section, key, fallback=SOURCE_MODE_DIRECTORY), allow_empty=True)
-        elif key == "paths" and section == SOURCE_SECTION:
-            prompt_source_path_list_action(cfg)
-            mapping = show_config(cfg)
-            choice = None
-            continue
         else:
             new_value = _read_input("新值: ").strip()
 
@@ -2738,6 +2857,29 @@ def load_config():
         cfg.remove_option(SOURCE_SECTION, "local_mode")
         updated = True
 
+    if cfg.has_option(SOURCE_SECTION, "paths_file"):
+        legacy_paths_file = cfg.get(SOURCE_SECTION, "paths_file", fallback="").strip()
+        current_list_file = cfg.get("PATH", "migration_list_file", fallback="").strip()
+        default_list_file = DEFAULT_CONFIG["PATH"]["migration_list_file"]
+        if legacy_paths_file and current_list_file in {"", default_list_file}:
+            cfg.set("PATH", "migration_list_file", legacy_paths_file)
+        cfg.remove_option(SOURCE_SECTION, "paths_file")
+        updated = True
+
+    if cfg.has_option(SOURCE_SECTION, "paths"):
+        legacy_paths = parse_source_path_list(cfg.get(SOURCE_SECTION, "paths", fallback=""))
+        if legacy_paths:
+            list_file = _source_paths_file(cfg)
+            current_paths = _read_source_paths_file(list_file)
+            merged_paths = list(current_paths)
+            for legacy_path in legacy_paths:
+                if legacy_path not in merged_paths:
+                    merged_paths.append(legacy_path)
+            if merged_paths != current_paths:
+                _write_source_paths_file(list_file, merged_paths)
+        cfg.remove_option(SOURCE_SECTION, "paths")
+        updated = True
+
     raw_source_selection_mode = cfg.get(SOURCE_SECTION, "selection_mode", fallback=SOURCE_MODE_DIRECTORY)
     normalized_source_selection_mode = _normalize_source_selection_mode(
         raw_source_selection_mode,
@@ -2770,7 +2912,7 @@ def write_config_with_comments(cfg):
             f.write("# ------------------------------\n")
             f.write(f"[{section}]\n\n")
 
-            for key, value in cfg[section].items():
+            for key, value in _ordered_items_for_section(cfg, section):
                 desc = CONFIG_DESC.get(f"{section}.{key}", "")
                 if desc:
                     f.write(f"# {desc}\n")
@@ -2797,7 +2939,7 @@ def validate_config(cfg):
 
     source_path = cfg.get(SOURCE_SECTION, "path", fallback="").strip()
     source_selection_mode = get_source_selection_mode(cfg)
-    source_paths = cfg.get(SOURCE_SECTION, "paths", fallback="")
+    source_paths = serialize_source_path_list(_source_path_list(cfg))
     source_endpoint = cfg.get(SOURCE_SECTION, "endpoint", fallback="").strip()
     source_bucket = cfg.get(SOURCE_SECTION, "bucket", fallback="").strip()
     source_ak = cfg.get(SOURCE_SECTION, "ak", fallback="").strip()
@@ -2823,13 +2965,13 @@ def validate_config(cfg):
             sys.exit(1)
 
         if source_selection_mode == SOURCE_MODE_LIST:
-            paths = parse_source_path_list(source_paths)
+            paths = _source_path_list(cfg)
             if not paths:
-                print("❌ SOURCE.paths 未配置，列表模式至少需要一个文件或目录")
+                print("❌ PATH.migration_list_file 未配置或列表为空，列表模式至少需要一个文件或目录")
                 sys.exit(1)
             for path_value in paths:
                 if not os.path.exists(path_value):
-                    print(f"❌ SOURCE.paths 中的路径不存在：{path_value}")
+                    print(f"❌ 源端列表文件中的路径不存在：{path_value}")
                     sys.exit(1)
         else:
             if not source_path:
@@ -2857,8 +2999,8 @@ def validate_config(cfg):
         if not source_bucket:
             print("❌ SOURCE.bucket 未配置")
             sys.exit(1)
-        if source_selection_mode == SOURCE_MODE_LIST and not parse_source_path_list(source_paths):
-            print("❌ SOURCE.paths 未配置，S3 列表模式至少需要一个前缀或对象")
+        if source_selection_mode == SOURCE_MODE_LIST and not _source_path_list(cfg):
+            print("❌ PATH.migration_list_file 未配置或列表为空，S3 列表模式至少需要一个前缀或对象")
             sys.exit(1)
 
     if target_type == MODE_LOCAL:
@@ -2953,7 +3095,7 @@ def _legacy_main():
 
     source_path = cfg.get(SOURCE_SECTION, "path", fallback="").strip()
     source_selection_mode = get_source_selection_mode(cfg)
-    source_paths = cfg.get(SOURCE_SECTION, "paths", fallback="")
+    source_paths = serialize_source_path_list(_source_path_list(cfg))
     source_ak = _decrypt_from_config(cfg, SOURCE_SECTION, "ak")
     source_sk = _decrypt_from_config(cfg, SOURCE_SECTION, "sk")
     source_endpoint = cfg.get(SOURCE_SECTION, "endpoint", fallback="").strip()
@@ -3281,7 +3423,7 @@ def main():
 
     source_path = cfg.get(SOURCE_SECTION, "path", fallback="").strip()
     source_selection_mode = get_source_selection_mode(cfg)
-    source_paths = cfg.get(SOURCE_SECTION, "paths", fallback="")
+    source_paths = serialize_source_path_list(_source_path_list(cfg))
     source_ak = _decrypt_from_config(cfg, SOURCE_SECTION, "ak")
     source_sk = _decrypt_from_config(cfg, SOURCE_SECTION, "sk")
     source_endpoint = cfg.get(SOURCE_SECTION, "endpoint", fallback="").strip()
