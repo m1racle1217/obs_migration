@@ -6,6 +6,16 @@ from .capabilities import detect_backend_capabilities
 from .checkpoint import Checkpoint
 from .dashboard import Dashboard
 from .governor import ResourceGovernor
+from .object_browser import (
+    BrowserItem,
+    BrowserPage,
+    count_remote_prefix_items,
+    create_obs_client,
+    list_local_path,
+    list_remote_buckets,
+    list_remote_prefix,
+    parent_prefix,
+)
 from .progress import Progress
 from .ratelimiter import RateLimiter
 from .report import Reporter
@@ -50,6 +60,14 @@ __all__ = [
     "Dashboard",
     "Reporter",
     "detect_backend_capabilities",
+    "BrowserItem",
+    "BrowserPage",
+    "count_remote_prefix_items",
+    "create_obs_client",
+    "list_local_path",
+    "list_remote_buckets",
+    "list_remote_prefix",
+    "parent_prefix",
     "safe_decode",
     "safe_path",
     "normalize_obs_key",

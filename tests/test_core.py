@@ -21,6 +21,13 @@ from rich.panel import Panel
 from core.checkpoint import Checkpoint
 from core.dashboard import Dashboard
 from core.obs_index import build_obs_index
+from core.object_browser import (
+    count_remote_prefix_items,
+    list_local_path,
+    list_remote_buckets,
+    list_remote_prefix,
+    parent_prefix,
+)
 from core.progress import Progress
 from core.report import Reporter
 from core.scan_control import AdaptiveScanController
@@ -177,6 +184,106 @@ class ObsIndexTests(unittest.TestCase):
 # ================================
 # 测试结果报告器
 # ================================
+class ObjectBrowserTests(unittest.TestCase):
+    """测试桶 / 目录浏览与分页属性抽取。"""
+
+    def test_list_remote_buckets_paginates_and_sorts(self):
+        class FakeClient:
+            def listBuckets(self):
+                return SimpleNamespace(
+                    status=200,
+                    body=SimpleNamespace(
+                        buckets=[
+                            SimpleNamespace(name="z-bucket"),
+                            SimpleNamespace(name="a-bucket"),
+                            SimpleNamespace(name="m-bucket"),
+                        ]
+                    ),
+                )
+
+        page = list_remote_buckets(FakeClient(), page=1, page_size=2)
+
+        self.assertEqual([item.name for item in page.items], ["a-bucket", "m-bucket"])
+        self.assertTrue(page.has_next)
+        self.assertEqual(page.total_known, 3)
+
+    def test_list_remote_prefix_returns_dirs_files_and_next_marker(self):
+        class FakeClient:
+            def listObjects(self, bucket, delimiter="/", prefix="", marker=None, max_keys=1000):
+                self.last_call = {
+                    "bucket": bucket,
+                    "delimiter": delimiter,
+                    "prefix": prefix,
+                    "marker": marker,
+                    "max_keys": max_keys,
+                }
+                return SimpleNamespace(
+                    status=200,
+                    body=SimpleNamespace(
+                        commonPrefixes=[SimpleNamespace(prefix="root/photos/")],
+                        contents=[
+                            SimpleNamespace(
+                                key="root/a.txt",
+                                size=1234,
+                                etag="etag-a",
+                                lastModified="2026-04-28 10:00:00",
+                                storageClass="STANDARD",
+                            ),
+                            SimpleNamespace(key="root/", size=0),
+                        ],
+                        is_truncated=True,
+                        next_marker="next-page",
+                    ),
+                )
+
+        client = FakeClient()
+        page = list_remote_prefix(client, "bucket", "root", page_size=10)
+
+        self.assertEqual(client.last_call["prefix"], "root/")
+        self.assertEqual(client.last_call["delimiter"], "/")
+        self.assertEqual(page.next_marker, "next-page")
+        self.assertTrue(page.has_next)
+        self.assertEqual([(item.kind, item.name) for item in page.items], [("dir", "photos"), ("file", "a.txt")])
+        self.assertEqual(page.items[1].size, 1234)
+        self.assertEqual(page.items[1].etag, "etag-a")
+        self.assertEqual(page.items[1].storage_class, "STANDARD")
+
+    def test_count_remote_prefix_items_counts_all_pages(self):
+        class FakeClient:
+            def listObjects(self, bucket, delimiter="/", prefix="", marker=None, max_keys=1000):
+                if marker is None:
+                    return SimpleNamespace(
+                        status=200,
+                        body=SimpleNamespace(
+                            commonPrefixes=[SimpleNamespace(prefix="root/dir/")],
+                            contents=[SimpleNamespace(key="root/a.txt", size=1)],
+                            is_truncated=True,
+                            next_marker="page-2",
+                        ),
+                    )
+
+                return SimpleNamespace(
+                    status=200,
+                    body=SimpleNamespace(
+                        commonPrefixes=[],
+                        contents=[SimpleNamespace(key="root/b.txt", size=2)],
+                        is_truncated=False,
+                        next_marker=None,
+                    ),
+                )
+
+        self.assertEqual(count_remote_prefix_items(FakeClient(), "bucket", "root"), 3)
+
+    def test_parent_prefix_and_local_path_pagination(self):
+        self.assertEqual(parent_prefix("a/b/c"), "a/b")
+        self.assertEqual(parent_prefix("a"), "")
+
+        page = list_local_path(".", page=1, page_size=1)
+
+        self.assertGreaterEqual(page.total_known, 1)
+        self.assertEqual(len(page.items), 1)
+
+
 class ReporterTests(unittest.TestCase):
     """测试已完成与未完成任务的 CSV / JSON 报告。"""
 

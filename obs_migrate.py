@@ -58,8 +58,14 @@ from core import (
     Scheduler,
     TaskChecker,
     TaskTransfer,
+    count_remote_prefix_items,
+    create_obs_client,
     init_source_client,
     init_target,
+    list_local_path,
+    list_remote_buckets,
+    list_remote_prefix,
+    parent_prefix,
     scan_local_sources,
     scan_s3_objects,
 )
@@ -508,6 +514,116 @@ def _read_input_posix(prompt):
 # ================================
 # 创建运行目录
 # ================================
+def _read_menu_input(prompt, hotkeys=None, max_number=None):
+    hotkeys = {str(key).lower() for key in (hotkeys or [])}
+    max_number = int(max_number or 0)
+
+    if not (
+        sys.stdin
+        and sys.stdout
+        and hasattr(sys.stdin, "isatty")
+        and hasattr(sys.stdout, "isatty")
+        and sys.stdin.isatty()
+        and sys.stdout.isatty()
+    ):
+        return input(prompt)
+
+    if os.name == "nt":
+        return _read_menu_input_windows(prompt, hotkeys, max_number)
+
+    return _read_menu_input_posix(prompt, hotkeys, max_number)
+
+
+def _read_menu_input_windows(prompt, hotkeys, max_number):
+    import msvcrt
+
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    chars = []
+
+    while True:
+        ch = msvcrt.getwch()
+        result = _handle_menu_char(ch, chars, hotkeys, max_number)
+        if result is None:
+            continue
+        if result == "__SKIP_NEXT__":
+            msvcrt.getwch()
+            continue
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        return result
+
+
+def _read_menu_input_posix(prompt, hotkeys, max_number):
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    original = termios.tcgetattr(fd)
+    chars = []
+
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+
+    try:
+        tty.setraw(fd)
+        while True:
+            ch = sys.stdin.read(1)
+            result = _handle_menu_char(ch, chars, hotkeys, max_number)
+            if result is None:
+                continue
+            if result == "__SKIP_NEXT__":
+                continue
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            return result
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, original)
+
+
+def _handle_menu_char(ch, chars, hotkeys, max_number):
+    if ch in {"\x00", "\xe0"}:
+        return "__SKIP_NEXT__"
+
+    if ch in {"\r", "\n"}:
+        return "".join(chars)
+
+    if ch == "\x03":
+        raise KeyboardInterrupt
+
+    if ch in {"\b", "\x7f"}:
+        if chars:
+            chars.pop()
+            sys.stdout.write("\b \b")
+            sys.stdout.flush()
+        return None
+
+    if ch == "\x1b":
+        return None
+
+    if not ch.isprintable():
+        return None
+
+    lowered = ch.lower()
+    if not chars and lowered in hotkeys:
+        sys.stdout.write(ch)
+        sys.stdout.flush()
+        return ch
+
+    if ch.isdigit():
+        chars.append(ch)
+        sys.stdout.write(ch)
+        sys.stdout.flush()
+        if max_number > 0 and max_number <= 9:
+            return "".join(chars)
+        return None
+
+    chars.append(ch)
+    sys.stdout.write(ch)
+    sys.stdout.flush()
+    return None
+
+
 def ensure_dirs():
     for directory in ("./logs", "./state", "./failed"):
         os.makedirs(resolve_runtime_path(directory), exist_ok=True)
@@ -910,30 +1026,46 @@ def _box_line(text, width):
 # 渲染文本盒子
 # ================================
 def _print_box(title, body_lines, footer_lines=None, subtitle_lines=None):
+    def line_text(line):
+        if isinstance(line, tuple):
+            return line[0]
+        return line
+
+    def line_color(line, default_color):
+        if isinstance(line, tuple) and len(line) > 1:
+            return line[1]
+        return default_color
+
     lines = []
     if subtitle_lines:
-        lines.extend(subtitle_lines)
-    lines.extend(body_lines)
+        lines.extend(line_text(line) for line in subtitle_lines)
+    lines.extend(line_text(line) for line in body_lines)
     if footer_lines:
-        lines.extend(footer_lines)
+        lines.extend(line_text(line) for line in footer_lines)
 
     width = _resolve_box_width(title, lines)
     print(f"{Fore.CYAN}{_box_border(title, width, top=True)}{Style.RESET_ALL}")
 
     if subtitle_lines:
         for line in subtitle_lines:
-            print(f"{Fore.LIGHTBLACK_EX}{_box_line(line, width)}{Style.RESET_ALL}")
+            text = line_text(line)
+            color = line_color(line, Fore.LIGHTBLACK_EX)
+            print(f"{color}{_box_line(text, width)}{Style.RESET_ALL}")
         if body_lines or footer_lines:
             print(f"{Fore.CYAN}{_box_separator(width)}{Style.RESET_ALL}")
 
     for line in body_lines:
-        print(f"{Fore.WHITE}{_box_line(line, width)}{Style.RESET_ALL}")
+        text = line_text(line)
+        color = line_color(line, Fore.WHITE)
+        print(f"{color}{_box_line(text, width)}{Style.RESET_ALL}")
 
     if footer_lines:
         if body_lines:
             print(f"{Fore.CYAN}{_box_separator(width)}{Style.RESET_ALL}")
         for line in footer_lines:
-            print(f"{Fore.GREEN}{_box_line(line, width)}{Style.RESET_ALL}")
+            text = line_text(line)
+            color = line_color(line, Fore.GREEN)
+            print(f"{color}{_box_line(text, width)}{Style.RESET_ALL}")
 
     print(f"{Fore.CYAN}{_box_border(title, width, top=False)}{Style.RESET_ALL}")
 
@@ -941,6 +1073,340 @@ def _print_box(title, body_lines, footer_lines=None, subtitle_lines=None):
 # ================================
 # 获取菜单分组内的配置项
 # ================================
+def _format_browser_size(value):
+    if value is None:
+        return "-"
+
+    try:
+        size = float(value)
+    except Exception:
+        return "-"
+
+    units = [
+        (1024.0 ** 4, "T"),
+        (1024.0 ** 3, "G"),
+        (1024.0 ** 2, "M"),
+        (1024.0, "KB"),
+    ]
+    for factor, unit in units:
+        if size >= factor:
+            return f"{size / factor:.2f}{unit}"
+    return f"{int(size)}B"
+
+
+def _format_browser_time(value):
+    try:
+        timestamp = float(value or 0)
+    except Exception:
+        timestamp = 0
+
+    if timestamp <= 0:
+        return "-"
+
+    try:
+        return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return "-"
+
+
+def _browser_lines(page):
+    rows = []
+    for index, item in enumerate(page.items or [], start=1):
+        kind = {"bucket": "桶", "dir": "目录", "file": "文件"}.get(item.kind, item.kind)
+        name = item.name + ("/" if item.kind == "dir" and not item.name.endswith("/") else "")
+        detail = (
+            f"{index:>3}. "
+            f"{_fit_display(kind, 4)} "
+            f"{_fit_display(_shorten_text(name, 34), 34)} "
+            f"{_fit_display(_format_browser_size(item.size), 10)} "
+            f"{_fit_display(_format_browser_time(item.mtime), 19)}"
+        )
+        rows.append(detail)
+
+    if not rows:
+        rows.append("(空)")
+    return rows
+
+
+def _browser_count_text(page, total=None):
+    shown = len(page.items or [])
+    if shown <= 0:
+        shown_text = "0"
+    else:
+        start = (max(int(page.page or 1), 1) - 1) * max(int(page.page_size or shown), 1) + 1
+        end = start + shown - 1
+        shown_text = str(start) if start == end else f"{start}-{end}"
+
+    total_value = page.total_known if total is None else total
+    if total_value is None:
+        return f"当前显示: {shown_text} / 对象数量: 统计中，按 R 刷新"
+    return f"当前显示: {shown_text} / 对象数量: {total_value}"
+
+
+def _remote_browser_title(section, bucket, prefix):
+    side = "源端" if section == SOURCE_SECTION else "目标端"
+    if not bucket:
+        return f"{side}桶列表"
+
+    shown_prefix = prefix or "/"
+    return f"{side}浏览: {bucket}/{shown_prefix}"
+
+
+def _save_browser_selection(cfg, section, bucket=None, prefix=None, path=None):
+    if bucket is not None:
+        cfg[section]["bucket"] = bucket
+    if prefix is not None:
+        cfg[section]["prefix"] = prefix
+    if path is not None:
+        cfg[section]["path"] = path
+    write_config_with_comments(cfg)
+    print(f"\n已保存到 {resolve_config_file()}\n")
+
+
+def browse_local_config(cfg, section, page_size=30):
+    current_path = cfg.get(section, "path", fallback="").strip() or os.getcwd()
+    page_no = 1
+
+    while True:
+        try:
+            page = list_local_path(current_path, page=page_no, page_size=page_size)
+        except Exception as exc:
+            print(f"无法读取本地目录: {exc}")
+            return
+
+        subtitle_lines = [
+            (f"当前位置: {_shorten_text(page.path, 72)}", Fore.YELLOW),
+            (_browser_count_text(page), Fore.MAGENTA),
+            "目录可进入；S 保存当前目录；B 上一层；N/P 翻页；Q 返回。",
+        ]
+        footer = ["[S] 保存当前目录    [B] 上一层    [N] 下一页    [P] 上一页    [Q] 返回"]
+        _print_box("本地目录浏览", _browser_lines(page), footer_lines=footer, subtitle_lines=subtitle_lines)
+
+        answer = _read_menu_input(
+            "\n选择编号，或按 S/B/N/P/Q: ",
+            hotkeys={"s", "b", "n", "p", "q"},
+            max_number=len(page.items or []),
+        ).strip()
+        lowered = answer.lower()
+
+        if lowered == "q":
+            return
+        if lowered == "s":
+            _save_browser_selection(cfg, section, path=page.path)
+            return
+        if lowered == "b":
+            parent = os.path.dirname(page.path)
+            if parent and parent != page.path:
+                current_path = parent
+                page_no = 1
+            continue
+        if lowered == "n":
+            if page.has_next:
+                page_no += 1
+            continue
+        if lowered == "p":
+            page_no = max(1, page_no - 1)
+            continue
+        if answer.isdigit():
+            item_index = int(answer) - 1
+            if 0 <= item_index < len(page.items):
+                item = page.items[item_index]
+                if item.kind == "dir":
+                    current_path = item.path
+                    page_no = 1
+                else:
+                    print("文件仅展示属性，请选择目录进入或保存当前目录。")
+            continue
+
+        print("请输入有效编号，或输入 S / B / N / P / Q。")
+
+
+def browse_remote_config(cfg, section, page_size=30):
+    ak = _decrypt_from_config(cfg, section, "ak")
+    sk = _decrypt_from_config(cfg, section, "sk")
+    endpoint = cfg.get(section, "endpoint", fallback="").strip()
+    bucket = cfg.get(section, "bucket", fallback="").strip()
+    prefix = sanitize_key(cfg.get(section, "prefix", fallback="")).strip("/")
+
+    if not (ak and sk and endpoint):
+        print("请先配置 ak / sk / endpoint，再使用远端浏览。")
+        return
+
+    request_timeout = 60
+    if cfg.has_section("UPLOAD"):
+        request_timeout = cfg.getint("UPLOAD", "request_timeout", fallback=60)
+
+    try:
+        client = create_obs_client(ak, sk, endpoint, request_timeout=request_timeout)
+    except Exception as exc:
+        print(f"创建远端客户端失败: {exc}")
+        return
+
+    mode = "objects" if bucket else "buckets"
+    bucket_page_no = 1
+    object_page_no = 1
+    object_markers = [None]
+    object_count_cache = {}
+    object_count_threads = {}
+
+    def get_cached_or_start_count(count_bucket, count_prefix):
+        count_key = (count_bucket, count_prefix)
+        if count_key in object_count_cache:
+            return object_count_cache[count_key]
+
+        if count_key not in object_count_threads:
+            def count_worker():
+                try:
+                    object_count_cache[count_key] = count_remote_prefix_items(
+                        client,
+                        count_bucket,
+                        count_prefix,
+                    )
+                except Exception:
+                    object_count_cache[count_key] = None
+
+            thread = threading.Thread(target=count_worker, daemon=True)
+            object_count_threads[count_key] = thread
+            thread.start()
+
+        return None
+
+    while True:
+        try:
+            if mode == "buckets":
+                page = list_remote_buckets(client, page=bucket_page_no, page_size=page_size)
+            else:
+                marker = object_markers[object_page_no - 1] if object_page_no - 1 < len(object_markers) else None
+                page = list_remote_prefix(
+                    client,
+                    bucket,
+                    prefix,
+                    marker=marker,
+                    page=object_page_no,
+                    page_size=page_size,
+                )
+        except Exception as exc:
+            print(f"远端列表读取失败: {exc}")
+            if mode == "objects":
+                answer = _read_menu_input("是否返回桶列表? (y/N): ", hotkeys={"y", "n"}).strip().lower()
+                if answer in {"y", "yes"}:
+                    mode = "buckets"
+                    bucket_page_no = 1
+                    continue
+            return
+
+        if mode == "objects" and page.next_marker:
+            if len(object_markers) <= object_page_no:
+                object_markers.append(page.next_marker)
+            else:
+                object_markers[object_page_no] = page.next_marker
+
+        if mode == "buckets":
+            total_items = page.total_known
+        else:
+            if page.has_next:
+                total_items = get_cached_or_start_count(bucket, prefix)
+            else:
+                total_items = len(page.items or [])
+
+        subtitle_lines = [
+            (f"Endpoint: {_shorten_text(endpoint, 72)}", Fore.LIGHTBLACK_EX),
+            "选择目录可进入；目录列表大于10需要手动键入回车跳转\nS 保存当前桶/目录；B 上一层；N/P 翻页；Q 返回。",
+        ]
+        if mode == "buckets":
+            subtitle_lines.append((_browser_count_text(page, total=total_items), Fore.MAGENTA))
+        else:
+            subtitle_lines.append((f"当前: {bucket}/{prefix or '/'}", Fore.YELLOW))
+            subtitle_lines.append((_browser_count_text(page, total=total_items), Fore.MAGENTA))
+        footer = ["[S] 保存当前位置到配置文件    [B] 上一层    [N] 下一页    [P] 上一页    [R] 刷新    [Q] 返回"]
+        _print_box(
+            _remote_browser_title(section, bucket if mode == "objects" else "", prefix),
+            _browser_lines(page),
+            footer_lines=footer,
+            subtitle_lines=subtitle_lines,
+        )
+
+        answer = _read_menu_input(
+            "\n选择编号，或按 S/B/N/P/R/Q: ",
+            hotkeys={"s", "b", "n", "p", "r", "q"},
+            max_number=len(page.items or []),
+        ).strip()
+        lowered = answer.lower()
+
+        if lowered == "q":
+            return
+        if lowered == "r":
+            continue
+        if lowered == "s":
+            if mode == "buckets":
+                print("请先选择一个桶，进入后再保存。")
+            else:
+                _save_browser_selection(cfg, section, bucket=bucket, prefix=prefix)
+                return
+            continue
+        if lowered == "b":
+            if mode == "buckets":
+                return
+            parent = parent_prefix(prefix)
+            if parent != prefix:
+                prefix = parent
+                object_page_no = 1
+                object_markers = [None]
+            else:
+                mode = "buckets"
+                bucket_page_no = 1
+            continue
+        if lowered == "n":
+            if page.has_next:
+                if mode == "buckets":
+                    bucket_page_no += 1
+                else:
+                    object_page_no += 1
+            continue
+        if lowered == "p":
+            if mode == "buckets":
+                bucket_page_no = max(1, bucket_page_no - 1)
+            else:
+                object_page_no = max(1, object_page_no - 1)
+            continue
+        if answer.isdigit():
+            item_index = int(answer) - 1
+            if 0 <= item_index < len(page.items):
+                item = page.items[item_index]
+                if item.kind == "bucket":
+                    bucket = item.name
+                    prefix = ""
+                    mode = "objects"
+                    object_page_no = 1
+                    object_markers = [None]
+                elif item.kind == "dir":
+                    prefix = item.path
+                    object_page_no = 1
+                    object_markers = [None]
+                else:
+                    print("文件仅展示属性，请选择目录进入或保存当前目录。")
+            continue
+
+        print("请输入有效编号，或输入 S / B / N / P / Q。")
+
+
+def browse_storage_config(cfg, group_id):
+    if group_id == "source":
+        section = SOURCE_SECTION
+        default_mode = MODE_LOCAL
+    elif group_id == "target":
+        section = TARGET_SECTION
+        default_mode = MODE_S3
+    else:
+        return
+
+    mode = _normalize_mode(cfg.get(section, "type", fallback=default_mode), default=default_mode)
+    if mode == MODE_S3:
+        browse_remote_config(cfg, section)
+    else:
+        browse_local_config(cfg, section)
+
+
 def _group_items(cfg, group_id):
     group = _get_config_menu_group(group_id)
     rows = []
@@ -1061,7 +1527,7 @@ def show_config_menu(cfg):
         f"配置文件：{_shorten_text(resolve_config_file(), 62)}",
         "提示：先选分组进入详情，修改后会自动保存。",
     ]
-    footer_lines = ["[Y] 启动迁移程序    [Q] 退出程序"]
+    footer_lines = ["[S] 浏览源端目录    [T] 浏览目标端目录    [Y] 启动迁移程序    [Q] 退出程序"]
     print()
     _print_box("配置菜单", body_lines, footer_lines=footer_lines, subtitle_lines=subtitle_lines)
     return mapping
@@ -1099,7 +1565,10 @@ def show_config_group(cfg, group_id):
     if section_hint:
         subtitle_lines.append(section_hint)
 
-    footer_lines = ["[B] 返回上一级    [Y] 启动迁移程序    [Q] 退出程序"]
+    if group_id in {"source", "target"}:
+        footer_lines = ["[O] 浏览桶/目录    [B] 返回上一级    [Y] 启动迁移程序    [Q] 退出程序"]
+    else:
+        footer_lines = ["[B] 返回上一级    [Y] 启动迁移程序    [Q] 退出程序"]
     print()
     _print_box(group["title"], body_lines, footer_lines=footer_lines, subtitle_lines=subtitle_lines)
     return mapping
@@ -1111,8 +1580,23 @@ def show_config_group(cfg, group_id):
 def edit_config_group(cfg, group_id):
     while True:
         mapping = show_config_group(cfg, group_id)
-        answer = _read_input("\n请选择编号，或输入 B/Y/Q: ").strip()
+        if group_id in {"source", "target"}:
+            answer = _read_menu_input(
+                "\n请选择编号，或按 O/B/Y/Q: ",
+                hotkeys={"o", "b", "y", "q"},
+                max_number=len(mapping),
+            ).strip()
+        else:
+            answer = _read_menu_input(
+                "\n请选择编号，或按 B/Y/Q: ",
+                hotkeys={"b", "y", "q"},
+                max_number=len(mapping),
+            ).strip()
         lowered = answer.lower()
+
+        if lowered == "o" and group_id in {"source", "target"}:
+            browse_storage_config(cfg, group_id)
+            continue
 
         if lowered == "b":
             return "back"
@@ -1124,7 +1608,10 @@ def edit_config_group(cfg, group_id):
             return "quit"
 
         if answer not in mapping:
-            print("请输入有效编号，或输入 B / Y / Q。")
+            if group_id in {"source", "target"}:
+                print("请输入有效编号，或输入 O / B / Y / Q。")
+            else:
+                print("请输入有效编号，或输入 B / Y / Q。")
             continue
 
         section, key = mapping[answer]
@@ -1152,8 +1639,20 @@ def edit_config_group(cfg, group_id):
 def run_config_menu(cfg):
     while True:
         mapping = show_config_menu(cfg)
-        answer = _read_input("\n请选择分组编号，或输入 Y/Q: ").strip()
+        answer = _read_menu_input(
+            "\n请选择分组编号，或按 S/T/Y/Q: ",
+            hotkeys={"s", "t", "y", "q"},
+            max_number=len(mapping),
+        ).strip()
         lowered = answer.lower()
+
+        if lowered == "s":
+            browse_storage_config(cfg, "source")
+            continue
+
+        if lowered == "t":
+            browse_storage_config(cfg, "target")
+            continue
 
         if lowered == "y":
             print()
@@ -1165,7 +1664,7 @@ def run_config_menu(cfg):
 
         group_id = mapping.get(answer)
         if group_id is None:
-            print("请输入有效分组编号，或输入 Y / Q。")
+            print("请输入有效分组编号，或输入 S / T / Y / Q。")
             continue
 
         action = edit_config_group(cfg, group_id)
