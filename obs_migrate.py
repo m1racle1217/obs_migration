@@ -1252,9 +1252,24 @@ def _box_line_colored(text, width, color):
 
 
 # ================================
+# 固定刷新交互面板
+# ================================
+def _clear_interactive_screen():
+    if not sys.stdout.isatty():
+        return
+    try:
+        sys.stdout.write("\033[2J\033[H")
+        sys.stdout.flush()
+    except Exception:
+        os.system("cls" if os.name == "nt" else "clear")
+
+
+# ================================
 # 渲染文本盒子
 # ================================
 def _print_box(title, body_lines, footer_lines=None, subtitle_lines=None):
+    _clear_interactive_screen()
+
     def line_text(line):
         if _is_segment_line(line):
             return _segments_text(line)
