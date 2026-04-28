@@ -2031,13 +2031,13 @@ def _storage_summary(mode, path_value, endpoint, bucket, prefix, selection_mode=
     if normalized_mode == MODE_LOCAL:
         if normalized_selection_mode == SOURCE_MODE_LIST:
             count = len(parse_source_path_list(paths_value)) if paths_count is None else paths_count
-            return f"local/list | {count} 项"
+            return f"local | list | {count} 项"
         return f"local | {_shorten_text(path_value or '-', 56)}"
 
     scheme = detect_storage_scheme(endpoint, fallback="s3")
     if normalized_selection_mode == SOURCE_MODE_LIST:
         count = len(parse_source_path_list(paths_value)) if paths_count is None else paths_count
-        return f"{normalized_mode}/list | {bucket or '-'} | {count} 项"
+        return f"{normalized_mode} | list | {bucket or '-'} | {count} 项"
     uri = build_object_uri(bucket, prefix, scheme=scheme)
     return f"{normalized_mode} | {_shorten_text(uri, 56)}"
 
@@ -2069,43 +2069,42 @@ def _group_summary(cfg, group_id):
 
     if group_id == "scanner":
         return (
-            f"workers={cfg.get('SCAN', 'scan_workers', fallback='-')} | "
+            f"scan_workers={cfg.get('SCAN', 'scan_workers', fallback='-')} | "
             f"batch={cfg.get('SCAN', 'batch_size', fallback='-')} | "
             f"queue={cfg.get('SCAN', 'queue_size', fallback='-')}"
         )
 
     if group_id == "transfer":
         return (
-            f"workers={cfg.get('UPLOAD', 'workers', fallback='-')} | "
+            f"upload_workers={cfg.get('UPLOAD', 'workers', fallback='-')} | "
             f"part={cfg.get('UPLOAD', 'part_size', fallback='-')} | "
             f"threshold={cfg.get('UPLOAD', 'multipart_threshold', fallback='-')}"
         )
 
     if group_id == "scheduler":
         return (
-            f"checkers={cfg.get('UPLOAD', 'checkers', fallback='-')} | "
+            f"check_workers={cfg.get('UPLOAD', 'checkers', fallback='-')} | "
             f"qps={cfg.get('UPLOAD', 'rate_limit', fallback='-')}/{cfg.get('UPLOAD', 'rate_limit_burst', fallback='-')} | "
             f"conn={cfg.get('UPLOAD', 'max_connections', fallback='-')}"
         )
 
     if group_id == "check":
         return (
-            f"compare={cfg.get('CHECK', 'target_compare_mode', fallback='-')} | "
-            f"verify={cfg.get('CHECK', 'verify_after_upload', fallback='-')} | "
-            f"head={_format_bool_text(cfg.get('CHECK', 'enable_head_check', fallback='true'))}"
+            f"compare_mode={cfg.get('CHECK', 'target_compare_mode', fallback='-')} | "
+            f"verify_after={cfg.get('CHECK', 'verify_after_upload', fallback='-')} | "
+            f"head_check={_format_bool_text(cfg.get('CHECK', 'enable_head_check', fallback='true'))}"
         )
 
     if group_id == "path":
         return (
             f"logs={_shorten_text(cfg.get('PATH', 'log_dir', fallback='-'), 18)} | "
             f"state={_shorten_text(cfg.get('PATH', 'state_dir', fallback='-'), 18)} | "
-            f"failed={_shorten_text(cfg.get('PATH', 'failed_dir', fallback='-'), 18)} | "
-            f"list={len(_source_path_list(cfg))} 项"
+            f"failed={_shorten_text(cfg.get('PATH', 'failed_dir', fallback='-'), 18)}"
         )
 
     if group_id == "ui":
         return (
-            f"prompt={_format_bool_text(cfg.get('UI', 'prompt_config', fallback='true'))} | "
+            f"prompt_config={_format_bool_text(cfg.get('UI', 'prompt_config', fallback='true'))} | "
             f"dashboard={_format_bool_text(cfg.get('UI', 'show_dashboard', fallback='true'))} | "
             f"lang={get_ui_language(cfg)}"
         )
@@ -2116,6 +2115,23 @@ def _group_summary(cfg, group_id):
 # ================================
 # 为摘要片段配色
 # ================================
+def _summary_value_color(value):
+    text = str(value or "").strip().lower()
+    if "://" in text or "\\" in text:
+        return _bright(MENU_COLOR_LIST)
+    if text in {MODE_LOCAL, MODE_S3, SOURCE_MODE_DIRECTORY, "auto", "head", "etag", "size", "none", "zh", "en"}:
+        return _bright(MENU_COLOR_MODE)
+    if text == SOURCE_MODE_LIST or text.endswith("项"):
+        return _bright(MENU_COLOR_LIST)
+    if text in {"true", "false"}:
+        return _bright(MENU_COLOR_TRUE if text == "true" else MENU_COLOR_FALSE)
+    if re.match(r"^\d+(\.\d+)?[a-z]*(/[0-9.]+[a-z]*)?$", text):
+        return _bright(MENU_COLOR_PARAM)
+    if "/" in text or "\\" in text:
+        return _bright(MENU_COLOR_PATH)
+    return MENU_COLOR_VALUE
+
+
 def _summary_segments(summary):
     parts = str(summary or "").split(" | ")
     segments = []
@@ -2123,15 +2139,21 @@ def _summary_segments(summary):
         if index > 0:
             segments.append((" | ", Fore.LIGHTBLACK_EX))
 
-        if index == 0:
-            color = _bright(MENU_COLOR_MODE)
-        elif part.endswith("项"):
-            color = _bright(MENU_COLOR_LIST)
-        elif "=" in part:
-            color = _bright(MENU_COLOR_PARAM)
+        if "=" in part:
+            key, value = part.split("=", 1)
+            segments.append((key, _bright(MENU_COLOR_KEY)))
+            segments.append(("=", MENU_COLOR_MUTED))
+            segments.append((value, _summary_value_color(value)))
+        elif "://" in part or "\\" in part:
+            segments.append((part, _summary_value_color(part)))
+        elif "/" in part:
+            slash_parts = part.split("/")
+            for slash_index, slash_part in enumerate(slash_parts):
+                if slash_index > 0:
+                    segments.append(("/", MENU_COLOR_MUTED))
+                segments.append((slash_part, _summary_value_color(slash_part)))
         else:
-            color = MENU_COLOR_VALUE
-        segments.append((part, color))
+            segments.append((part, _summary_value_color(part)))
     return segments
 
 
