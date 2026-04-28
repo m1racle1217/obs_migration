@@ -58,8 +58,13 @@ from core import (
     Scheduler,
     TaskChecker,
     TaskTransfer,
+    create_obs_client,
     init_source_client,
     init_target,
+    list_local_path,
+    list_remote_buckets,
+    list_remote_prefix,
+    parent_prefix,
     scan_local_sources,
     scan_s3_objects,
 )
@@ -941,6 +946,281 @@ def _print_box(title, body_lines, footer_lines=None, subtitle_lines=None):
 # ================================
 # 获取菜单分组内的配置项
 # ================================
+def _format_browser_size(value):
+    if value is None:
+        return "-"
+
+    try:
+        size = float(value)
+    except Exception:
+        return "-"
+
+    units = [
+        (1024.0 ** 4, "T"),
+        (1024.0 ** 3, "G"),
+        (1024.0 ** 2, "M"),
+        (1024.0, "KB"),
+    ]
+    for factor, unit in units:
+        if size >= factor:
+            return f"{size / factor:.2f}{unit}"
+    return f"{int(size)}B"
+
+
+def _format_browser_time(value):
+    try:
+        timestamp = float(value or 0)
+    except Exception:
+        timestamp = 0
+
+    if timestamp <= 0:
+        return "-"
+
+    try:
+        return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return "-"
+
+
+def _browser_lines(page):
+    rows = []
+    for index, item in enumerate(page.items or [], start=1):
+        kind = {"bucket": "桶", "dir": "目录", "file": "文件"}.get(item.kind, item.kind)
+        name = item.name + ("/" if item.kind == "dir" and not item.name.endswith("/") else "")
+        detail = (
+            f"{index:>3}. "
+            f"{_fit_display(kind, 4)} "
+            f"{_fit_display(_shorten_text(name, 34), 34)} "
+            f"{_fit_display(_format_browser_size(item.size), 10)} "
+            f"{_fit_display(_format_browser_time(item.mtime), 19)}"
+        )
+        rows.append(detail)
+
+    if not rows:
+        rows.append("(空)")
+    return rows
+
+
+def _remote_browser_title(section, bucket, prefix):
+    side = "源端" if section == SOURCE_SECTION else "目标端"
+    if not bucket:
+        return f"{side}桶列表"
+
+    shown_prefix = prefix or "/"
+    return f"{side}浏览: {bucket}/{shown_prefix}"
+
+
+def _save_browser_selection(cfg, section, bucket=None, prefix=None, path=None):
+    if bucket is not None:
+        cfg[section]["bucket"] = bucket
+    if prefix is not None:
+        cfg[section]["prefix"] = prefix
+    if path is not None:
+        cfg[section]["path"] = path
+    write_config_with_comments(cfg)
+    print(f"\n已保存到 {resolve_config_file()}\n")
+
+
+def browse_local_config(cfg, section, page_size=30):
+    current_path = cfg.get(section, "path", fallback="").strip() or os.getcwd()
+    page_no = 1
+
+    while True:
+        try:
+            page = list_local_path(current_path, page=page_no, page_size=page_size)
+        except Exception as exc:
+            print(f"无法读取本地目录: {exc}")
+            return
+
+        subtitle_lines = [
+            f"当前位置: {_shorten_text(page.path, 72)}",
+            "目录可进入；S 保存当前目录；B 上一层；N/P 翻页；Q 返回。",
+        ]
+        footer = ["[S] 保存当前目录    [B] 上一层    [N] 下一页    [P] 上一页    [Q] 返回"]
+        _print_box("本地目录浏览", _browser_lines(page), footer_lines=footer, subtitle_lines=subtitle_lines)
+
+        answer = _read_input("\n选择编号，或输入 S/B/N/P/Q: ").strip()
+        lowered = answer.lower()
+
+        if lowered == "q":
+            return
+        if lowered == "s":
+            _save_browser_selection(cfg, section, path=page.path)
+            return
+        if lowered == "b":
+            parent = os.path.dirname(page.path)
+            if parent and parent != page.path:
+                current_path = parent
+                page_no = 1
+            continue
+        if lowered == "n":
+            if page.has_next:
+                page_no += 1
+            continue
+        if lowered == "p":
+            page_no = max(1, page_no - 1)
+            continue
+        if answer.isdigit():
+            item_index = int(answer) - 1
+            if 0 <= item_index < len(page.items):
+                item = page.items[item_index]
+                if item.kind == "dir":
+                    current_path = item.path
+                    page_no = 1
+                else:
+                    print("文件仅展示属性，请选择目录进入或保存当前目录。")
+            continue
+
+        print("请输入有效编号，或输入 S / B / N / P / Q。")
+
+
+def browse_remote_config(cfg, section, page_size=30):
+    ak = _decrypt_from_config(cfg, section, "ak")
+    sk = _decrypt_from_config(cfg, section, "sk")
+    endpoint = cfg.get(section, "endpoint", fallback="").strip()
+    bucket = cfg.get(section, "bucket", fallback="").strip()
+    prefix = sanitize_key(cfg.get(section, "prefix", fallback="")).strip("/")
+
+    if not (ak and sk and endpoint):
+        print("请先配置 ak / sk / endpoint，再使用远端浏览。")
+        return
+
+    request_timeout = 60
+    if cfg.has_section("UPLOAD"):
+        request_timeout = cfg.getint("UPLOAD", "request_timeout", fallback=60)
+
+    try:
+        client = create_obs_client(ak, sk, endpoint, request_timeout=request_timeout)
+    except Exception as exc:
+        print(f"创建远端客户端失败: {exc}")
+        return
+
+    mode = "objects" if bucket else "buckets"
+    bucket_page_no = 1
+    object_page_no = 1
+    object_markers = [None]
+
+    while True:
+        try:
+            if mode == "buckets":
+                page = list_remote_buckets(client, page=bucket_page_no, page_size=page_size)
+            else:
+                marker = object_markers[object_page_no - 1] if object_page_no - 1 < len(object_markers) else None
+                page = list_remote_prefix(
+                    client,
+                    bucket,
+                    prefix,
+                    marker=marker,
+                    page=object_page_no,
+                    page_size=page_size,
+                )
+        except Exception as exc:
+            print(f"远端列表读取失败: {exc}")
+            if mode == "objects":
+                answer = _read_input("是否返回桶列表? (y/N): ").strip().lower()
+                if answer in {"y", "yes"}:
+                    mode = "buckets"
+                    bucket_page_no = 1
+                    continue
+            return
+
+        if mode == "objects" and page.next_marker:
+            if len(object_markers) <= object_page_no:
+                object_markers.append(page.next_marker)
+            else:
+                object_markers[object_page_no] = page.next_marker
+
+        subtitle_lines = [
+            f"Endpoint: {_shorten_text(endpoint, 72)}",
+            "目录可进入；文件仅展示属性；S 保存当前桶/目录；B 上一层；N/P 翻页；Q 返回。",
+        ]
+        if mode == "buckets":
+            subtitle_lines.append(f"桶总数: {page.total_known if page.total_known is not None else '-'}")
+        else:
+            subtitle_lines.append(f"当前: {bucket}/{prefix or '/'}")
+        footer = ["[S] 保存当前位置    [B] 上一层    [N] 下一页    [P] 上一页    [Q] 返回"]
+        _print_box(
+            _remote_browser_title(section, bucket if mode == "objects" else "", prefix),
+            _browser_lines(page),
+            footer_lines=footer,
+            subtitle_lines=subtitle_lines,
+        )
+
+        answer = _read_input("\n选择编号，或输入 S/B/N/P/Q: ").strip()
+        lowered = answer.lower()
+
+        if lowered == "q":
+            return
+        if lowered == "s":
+            if mode == "buckets":
+                print("请先选择一个桶，进入后再保存。")
+            else:
+                _save_browser_selection(cfg, section, bucket=bucket, prefix=prefix)
+                return
+            continue
+        if lowered == "b":
+            if mode == "buckets":
+                return
+            parent = parent_prefix(prefix)
+            if parent != prefix:
+                prefix = parent
+                object_page_no = 1
+                object_markers = [None]
+            else:
+                mode = "buckets"
+                bucket_page_no = 1
+            continue
+        if lowered == "n":
+            if page.has_next:
+                if mode == "buckets":
+                    bucket_page_no += 1
+                else:
+                    object_page_no += 1
+            continue
+        if lowered == "p":
+            if mode == "buckets":
+                bucket_page_no = max(1, bucket_page_no - 1)
+            else:
+                object_page_no = max(1, object_page_no - 1)
+            continue
+        if answer.isdigit():
+            item_index = int(answer) - 1
+            if 0 <= item_index < len(page.items):
+                item = page.items[item_index]
+                if item.kind == "bucket":
+                    bucket = item.name
+                    prefix = ""
+                    mode = "objects"
+                    object_page_no = 1
+                    object_markers = [None]
+                elif item.kind == "dir":
+                    prefix = item.path
+                    object_page_no = 1
+                    object_markers = [None]
+                else:
+                    print("文件仅展示属性，请选择目录进入或保存当前目录。")
+            continue
+
+        print("请输入有效编号，或输入 S / B / N / P / Q。")
+
+
+def browse_storage_config(cfg, group_id):
+    if group_id == "source":
+        section = SOURCE_SECTION
+        default_mode = MODE_LOCAL
+    elif group_id == "target":
+        section = TARGET_SECTION
+        default_mode = MODE_S3
+    else:
+        return
+
+    mode = _normalize_mode(cfg.get(section, "type", fallback=default_mode), default=default_mode)
+    if mode == MODE_S3:
+        browse_remote_config(cfg, section)
+    else:
+        browse_local_config(cfg, section)
+
+
 def _group_items(cfg, group_id):
     group = _get_config_menu_group(group_id)
     rows = []
@@ -1061,7 +1341,7 @@ def show_config_menu(cfg):
         f"配置文件：{_shorten_text(resolve_config_file(), 62)}",
         "提示：先选分组进入详情，修改后会自动保存。",
     ]
-    footer_lines = ["[Y] 启动迁移程序    [Q] 退出程序"]
+    footer_lines = ["[S] 浏览源端目录    [T] 浏览目标端目录    [Y] 启动迁移程序    [Q] 退出程序"]
     print()
     _print_box("配置菜单", body_lines, footer_lines=footer_lines, subtitle_lines=subtitle_lines)
     return mapping
@@ -1099,7 +1379,10 @@ def show_config_group(cfg, group_id):
     if section_hint:
         subtitle_lines.append(section_hint)
 
-    footer_lines = ["[B] 返回上一级    [Y] 启动迁移程序    [Q] 退出程序"]
+    if group_id in {"source", "target"}:
+        footer_lines = ["[O] 浏览桶/目录    [B] 返回上一级    [Y] 启动迁移程序    [Q] 退出程序"]
+    else:
+        footer_lines = ["[B] 返回上一级    [Y] 启动迁移程序    [Q] 退出程序"]
     print()
     _print_box(group["title"], body_lines, footer_lines=footer_lines, subtitle_lines=subtitle_lines)
     return mapping
@@ -1111,8 +1394,15 @@ def show_config_group(cfg, group_id):
 def edit_config_group(cfg, group_id):
     while True:
         mapping = show_config_group(cfg, group_id)
-        answer = _read_input("\n请选择编号，或输入 B/Y/Q: ").strip()
+        if group_id in {"source", "target"}:
+            answer = _read_input("\n请选择编号，或输入 O/B/Y/Q: ").strip()
+        else:
+            answer = _read_input("\n请选择编号，或输入 B/Y/Q: ").strip()
         lowered = answer.lower()
+
+        if lowered == "o" and group_id in {"source", "target"}:
+            browse_storage_config(cfg, group_id)
+            continue
 
         if lowered == "b":
             return "back"
@@ -1124,7 +1414,10 @@ def edit_config_group(cfg, group_id):
             return "quit"
 
         if answer not in mapping:
-            print("请输入有效编号，或输入 B / Y / Q。")
+            if group_id in {"source", "target"}:
+                print("请输入有效编号，或输入 O / B / Y / Q。")
+            else:
+                print("请输入有效编号，或输入 B / Y / Q。")
             continue
 
         section, key = mapping[answer]
@@ -1152,8 +1445,16 @@ def edit_config_group(cfg, group_id):
 def run_config_menu(cfg):
     while True:
         mapping = show_config_menu(cfg)
-        answer = _read_input("\n请选择分组编号，或输入 Y/Q: ").strip()
+        answer = _read_input("\n请选择分组编号，或输入 S/T/Y/Q: ").strip()
         lowered = answer.lower()
+
+        if lowered == "s":
+            browse_storage_config(cfg, "source")
+            continue
+
+        if lowered == "t":
+            browse_storage_config(cfg, "target")
+            continue
 
         if lowered == "y":
             print()
@@ -1165,7 +1466,7 @@ def run_config_menu(cfg):
 
         group_id = mapping.get(answer)
         if group_id is None:
-            print("请输入有效分组编号，或输入 Y / Q。")
+            print("请输入有效分组编号，或输入 S / T / Y / Q。")
             continue
 
         action = edit_config_group(cfg, group_id)
