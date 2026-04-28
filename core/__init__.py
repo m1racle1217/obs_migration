@@ -19,7 +19,7 @@ from .object_browser import (
 from .progress import Progress
 from .ratelimiter import RateLimiter
 from .report import Reporter
-from .s3_scanner import scan_s3_objects
+from .s3_scanner import scan_s3_objects, scan_s3_sources
 from .scan_control import AdaptiveScanController
 from .scanner import scan_directory, scan_local_sources
 from .scheduler import Scheduler
@@ -45,6 +45,7 @@ __all__ = [
     "scan_directory",
     "scan_local_sources",
     "scan_s3_objects",
+    "scan_s3_sources",
     "Scheduler",
     "OBSUploader",
     "TaskChecker",

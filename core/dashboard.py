@@ -102,6 +102,35 @@ TEXT = {
 }
 
 
+DASHBOARD_STYLE = {
+    "panel_border": "color(39)",
+    "panel_title": "bold color(45)",
+    "progress_label": "bold color(81)",
+    "progress_complete": "color(82)",
+    "progress_finished": "bold color(118)",
+    "progress_pulse": "color(213)",
+    "progress_percent": "bold color(226)",
+    "progress_detail": "color(159)",
+    "progress_speed": "bold color(118)",
+    "progress_eta": "color(245)",
+    "table_border": "color(33)",
+    "table_header": "bold color(231)",
+    "metric": "bold color(117)",
+    "value": "color(255)",
+    "count": "bold color(220)",
+    "speed": "bold color(118)",
+    "queue_ok": "color(159)",
+    "queue_busy": "bold color(220)",
+    "queue_full": "bold color(203)",
+    "error": "bold color(203)",
+    "status_running": "bold color(226)",
+    "status_done": "bold color(82)",
+    "status_wait": "bold color(213)",
+    "status_pending": "bold color(81)",
+    "muted": "color(245)",
+}
+
+
 # ================================
 # 实时仪表盘
 # ================================
@@ -141,17 +170,17 @@ class Dashboard:
         self.progress_bar_column = BarColumn(
             bar_width=40,
             style="grey23",
-            complete_style="bright_red",
-            finished_style="bright_green",
-            pulse_style="red",
+            complete_style=DASHBOARD_STYLE["progress_complete"],
+            finished_style=DASHBOARD_STYLE["progress_finished"],
+            pulse_style=DASHBOARD_STYLE["progress_pulse"],
         )
         self.progress_bar = RichProgress(
-            TextColumn(f"[bold cyan]{self.t('transfer')}[/bold cyan]"),
+            TextColumn(f"[{DASHBOARD_STYLE['progress_label']}]{self.t('transfer')}[/]"),
             self.progress_bar_column,
-            TextColumn("[bold white]{task.fields[progress_pct]}[/bold white]"),
-            TextColumn("[bright_white]{task.fields[progress_detail]}[/bright_white]"),
-            TextColumn("[bright_white]{task.fields[speed_detail]}[/bright_white]"),
-            TextColumn("[bright_black]{task.fields[eta_detail]}[/bright_black]"),
+            TextColumn(f"[{DASHBOARD_STYLE['progress_percent']}]{{task.fields[progress_pct]}}[/]"),
+            TextColumn(f"[{DASHBOARD_STYLE['progress_detail']}]{{task.fields[progress_detail]}}[/]"),
+            TextColumn(f"[{DASHBOARD_STYLE['progress_speed']}]{{task.fields[speed_detail]}}[/]"),
+            TextColumn(f"[{DASHBOARD_STYLE['progress_eta']}]{{task.fields[eta_detail]}}[/]"),
             console=self.console,
             expand=False,
         )
@@ -388,47 +417,98 @@ class Dashboard:
 
         table = Table(
             box=box.SIMPLE_HEAVY,
-            header_style="bold bright_white",
-            border_style="bright_blue",
-            row_styles=["none", "on grey11"],
+            header_style=DASHBOARD_STYLE["table_header"],
+            border_style=DASHBOARD_STYLE["table_border"],
+            row_styles=["none", "on grey7"],
             expand=False,
             pad_edge=False,
         )
-        table.add_column(self.t("metric_column"), style="bold cyan", no_wrap=True)
-        table.add_column(self.t("value_column"), style="bright_white")
+        table.add_column(self.t("metric_column"), style=DASHBOARD_STYLE["metric"], no_wrap=True)
+        table.add_column(self.t("value_column"), style=DASHBOARD_STYLE["value"])
 
-        table.add_row(self.t("files_done"), str(files_done))
-        table.add_row(self.t("upload_skip"), str(files_skip))
-        table.add_row(self.t("scan_skip"), str(scan_skip))
+        table.add_row(self.render_metric("files_done"), self.render_value(files_done, "count"))
+        table.add_row(self.render_metric("upload_skip"), self.render_value(files_skip, "muted_count"))
+        table.add_row(self.render_metric("scan_skip"), self.render_value(scan_skip, "muted_count"))
         table.add_row(
-            self.t("index_status"),
+            self.render_metric("index_status"),
             self.render_status(self.format_base_status(index_status_raw), index_status_raw),
         )
-        table.add_row(self.t("scan_status"), self.render_status(scan_status, scan_style_hint))
+        table.add_row(self.render_metric("scan_status"), self.render_status(scan_status, scan_style_hint))
         if self.checker_scheduler is not None:
-            table.add_row(self.t("check_status"), self.render_status(check_status, check_style_hint))
-        table.add_row(self.t("upload_status"), self.render_status(upload_status, upload_style_hint))
+            table.add_row(self.render_metric("check_status"), self.render_status(check_status, check_style_hint))
+        table.add_row(self.render_metric("upload_status"), self.render_status(upload_status, upload_style_hint))
         table.add_row(
-            self.t("progress"),
-            f"{done / 1024 / 1024:.1f}MB / {total / 1024 / 1024:.1f}MB",
+            self.render_metric("progress"),
+            self.render_value(f"{done / 1024 / 1024:.1f}MB / {total / 1024 / 1024:.1f}MB", "progress"),
         )
-        table.add_row(self.t("cache_hit"), f"{cache_hit}/{cache_total}")
-        table.add_row(self.t("hit_rate"), f"{hit_rate:.1f}%")
-        table.add_row(self.t("scan_files"), str(scan_files))
-        table.add_row(self.t("scan_speed"), f"{scan_speed:.0f} {self.t('files_per_sec')}")
-        table.add_row(self.t("scan_errors"), str(scan_errors))
-        table.add_row(self.t("upload_errors"), str(upload_errors))
-        table.add_row(self.t("process_speed"), f"{self.format_bytes(process_speed)}/s")
-        table.add_row(self.t("net_upload_speed"), f"{self.format_bytes(net_upload_speed)}/s")
+        table.add_row(self.render_metric("cache_hit"), self.render_value(f"{cache_hit}/{cache_total}", "ratio"))
+        table.add_row(self.render_metric("hit_rate"), self.render_value(f"{hit_rate:.1f}%", "ratio"))
+        table.add_row(self.render_metric("scan_files"), self.render_value(scan_files, "count"))
+        table.add_row(self.render_metric("scan_speed"), self.render_value(f"{scan_speed:.0f} {self.t('files_per_sec')}", "speed"))
+        table.add_row(self.render_metric("scan_errors"), self.render_value(scan_errors, "error_count"))
+        table.add_row(self.render_metric("upload_errors"), self.render_value(upload_errors, "error_count"))
+        table.add_row(self.render_metric("process_speed"), self.render_value(f"{self.format_bytes(process_speed)}/s", "speed"))
+        table.add_row(self.render_metric("net_upload_speed"), self.render_value(f"{self.format_bytes(net_upload_speed)}/s", "speed"))
         if self.checker_queue is not None:
-            table.add_row(self.t("check_queue"), checker_queue_display)
-        table.add_row(self.t("transfer_queue"), queue_display)
+            table.add_row(self.render_metric("check_queue"), self.render_queue(checker_queue_display))
+        table.add_row(self.render_metric("transfer_queue"), self.render_queue(queue_display))
         if self.checker_scheduler is not None:
-            table.add_row(self.t("check_workers"), str(len(self.checker_scheduler.threads)))
-        table.add_row(self.t("upload_workers"), str(len(self.scheduler.threads)))
-        table.add_row(self.t("scan_workers"), scan_worker_display)
+            table.add_row(self.render_metric("check_workers"), self.render_value(len(self.checker_scheduler.threads), "workers"))
+        table.add_row(self.render_metric("upload_workers"), self.render_value(len(self.scheduler.threads), "workers"))
+        table.add_row(self.render_metric("scan_workers"), self.render_value(scan_worker_display, "workers"))
 
         return table
+
+    # ================================
+    # 渲染指标名称颜色
+    # ================================
+    def render_metric(self, key):
+        style = DASHBOARD_STYLE["metric"]
+        if key.endswith("_status"):
+            style = "bold color(81)"
+        elif "queue" in key:
+            style = "bold color(159)"
+        elif "error" in key:
+            style = "bold color(203)"
+        elif "speed" in key:
+            style = "bold color(118)"
+        return Text(self.t(key), style=style)
+
+    # ================================
+    # 渲染指标值颜色
+    # ================================
+    def render_value(self, value, kind="default"):
+        text = str(value)
+        style = DASHBOARD_STYLE["value"]
+        if kind in {"count", "workers"}:
+            style = DASHBOARD_STYLE["count"]
+        elif kind == "muted_count":
+            style = DASHBOARD_STYLE["muted"] if str(value) in {"0", ""} else DASHBOARD_STYLE["count"]
+        elif kind == "error_count":
+            style = DASHBOARD_STYLE["muted"] if str(value) in {"0", ""} else DASHBOARD_STYLE["error"]
+        elif kind in {"speed", "ratio"}:
+            style = DASHBOARD_STYLE["speed"]
+        elif kind == "progress":
+            style = DASHBOARD_STYLE["progress_detail"]
+        return Text(text, style=style)
+
+    # ================================
+    # 渲染队列压力颜色
+    # ================================
+    def render_queue(self, value):
+        text = str(value)
+        style = DASHBOARD_STYLE["queue_ok"]
+        if "/" in text:
+            try:
+                current, total = text.split("/", 1)
+                ratio = float(current) / max(float(total), 1.0)
+                if ratio >= 0.9:
+                    style = DASHBOARD_STYLE["queue_full"]
+                elif ratio >= 0.5:
+                    style = DASHBOARD_STYLE["queue_busy"]
+            except Exception:
+                pass
+        return Text(text, style=style)
 
     # ================================
     # 渲染状态颜色
@@ -438,21 +518,21 @@ class Dashboard:
         lowered = str(style_hint or value).lower()
 
         if "error" in lowered:
-            style = "bold bright_red"
+            style = DASHBOARD_STYLE["error"]
         elif lowered.startswith("running"):
-            style = "bold yellow"
+            style = DASHBOARD_STYLE["status_running"]
         elif lowered.startswith("done"):
-            style = "bold bright_green"
+            style = DASHBOARD_STYLE["status_done"]
         elif (
             lowered == "queued"
             or lowered.startswith("waiting for scan")
             or lowered.startswith("waiting for check")
         ):
-            style = "bold magenta"
+            style = DASHBOARD_STYLE["status_wait"]
         elif lowered == "pending":
-            style = "bold cyan"
+            style = DASHBOARD_STYLE["status_pending"]
         else:
-            style = "bright_white"
+            style = DASHBOARD_STYLE["value"]
 
         return Text(text, style=style)
 
@@ -545,8 +625,8 @@ class Dashboard:
         )
         return Panel(
             content,
-            title=f"[bold bright_cyan]{self.t('panel_title')}[/bold bright_cyan]",
-            border_style="bright_blue",
+            title=f"[{DASHBOARD_STYLE['panel_title']}]{self.t('panel_title')}[/]",
+            border_style=DASHBOARD_STYLE["panel_border"],
             padding=(0, 1),
             expand=False,
         )

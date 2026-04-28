@@ -280,3 +280,44 @@ def scan_s3_objects(
         elapsed,
         total_scanned / elapsed,
     )
+
+
+# ================================
+# 扫描多组远端源
+# ================================
+def scan_s3_sources(
+    entries,
+    source_client,
+    source_bucket,
+    task_queue,
+    progress,
+    reporter=None,
+    scan_workers=1,
+    scan_done_event=None,
+    source_scheme="s3",
+    scan_controller=None,
+    low_level_retries=3,
+    low_level_retry_sleep=0.5,
+):
+    shared_scan_controller = scan_controller if len(entries or []) == 1 else None
+    try:
+        for entry in entries:
+            bucket = entry.get("bucket") or source_bucket
+            prefix = entry.get("prefix") or entry.get("key") or ""
+            scan_s3_objects(
+                source_client,
+                bucket,
+                prefix,
+                task_queue,
+                progress,
+                reporter=reporter,
+                scan_workers=scan_workers,
+                scan_done_event=None,
+                source_scheme=source_scheme,
+                scan_controller=shared_scan_controller,
+                low_level_retries=low_level_retries,
+                low_level_retry_sleep=low_level_retry_sleep,
+            )
+    finally:
+        if scan_done_event is not None:
+            scan_done_event.set()

@@ -87,6 +87,32 @@ def basename_from_prefix(prefix):
 
 
 # ================================
+# 归一化筛选关键字
+# ================================
+def _normalize_filters(filters):
+    if not filters:
+        return []
+    if isinstance(filters, str):
+        values = filters.split()
+    else:
+        values = []
+        for item in filters:
+            values.extend(str(item or "").split())
+    return [item.lower() for item in values if item]
+
+
+# ================================
+# 判断浏览器条目是否命中筛选
+# ================================
+def _matches_filters(item, filters):
+    terms = _normalize_filters(filters)
+    if not terms:
+        return True
+    haystack = f"{item.name} {item.path}".lower()
+    return all(term in haystack for term in terms)
+
+
+# ================================
 # 创建 OBS / S3 兼容客户端
 # ================================
 def create_obs_client(ak, sk, endpoint, request_timeout=60):
@@ -192,6 +218,7 @@ def list_remote_prefix(
     page_size=50,
     low_level_retries=3,
     low_level_retry_sleep=0.5,
+    filters=None,
 ):
     current_prefix = normalize_prefix(prefix)
     request_prefix = f"{current_prefix}/" if current_prefix else ""
@@ -208,69 +235,95 @@ def list_remote_prefix(
         except TypeError:
             return client.listObjects(bucket, **kwargs)
 
-    response = call_with_retries(
-        do_list,
-        retries=low_level_retries,
-        base_sleep=low_level_retry_sleep,
-        operation=f"browseList:{bucket}/{request_prefix or ''}",
-    )
-    if response.status >= 300:
-        raise RuntimeError(f"list objects error {response.status}")
-
-    body = getattr(response, "body", None)
-    if body is None:
-        return BrowserPage(scope="objects", bucket=bucket, prefix=current_prefix, page=page, page_size=page_size)
-
+    filter_terms = _normalize_filters(filters)
     items = []
-    for child_prefix in _extract_common_prefixes(body):
-        normalized = normalize_prefix(child_prefix)
-        if normalized == current_prefix:
-            continue
-        items.append(
-            BrowserItem(
-                name=basename_from_prefix(normalized),
-                kind="dir",
-                path=normalized,
-            )
-        )
+    body = None
+    next_marker = None
+    has_next = False
+    max_fetch_pages = 50 if filter_terms else 1
 
-    for obj in getattr(body, "contents", []) or []:
-        key = sanitize_key(normalize_obs_key(getattr(obj, "key", "") or "")).strip("/")
-        if not key:
-            continue
-        size = int(getattr(obj, "size", 0) or 0)
-        if key == current_prefix or (key.endswith("/") and size == 0):
-            continue
-        if current_prefix and not key.startswith(f"{current_prefix}/"):
-            continue
-        name = key.rsplit("/", 1)[-1]
-        if not name:
-            continue
-        items.append(
-            BrowserItem(
-                name=name,
-                kind="file",
-                path=key,
-                size=size,
-                mtime=_remote_object_mtime(obj),
-                etag=getattr(obj, "etag", None) or "",
-                storage_class=getattr(obj, "storageClass", None) or getattr(obj, "storage_class", "") or "",
-                raw=obj,
-            )
+    for _ in range(max_fetch_pages):
+        response = call_with_retries(
+            do_list,
+            retries=low_level_retries,
+            base_sleep=low_level_retry_sleep,
+            operation=f"browseList:{bucket}/{request_prefix or ''}",
         )
+        if response.status >= 300:
+            raise RuntimeError(f"list objects error {response.status}")
+
+        body = getattr(response, "body", None)
+        if body is None:
+            return BrowserPage(scope="objects", bucket=bucket, prefix=current_prefix, page=page, page_size=page_size)
+
+        page_items = []
+        for child_prefix in _extract_common_prefixes(body):
+            normalized = normalize_prefix(child_prefix)
+            if normalized == current_prefix:
+                continue
+            page_items.append(
+                BrowserItem(
+                    name=basename_from_prefix(normalized),
+                    kind="dir",
+                    path=normalized,
+                )
+            )
+
+        for obj in getattr(body, "contents", []) or []:
+            key = sanitize_key(normalize_obs_key(getattr(obj, "key", "") or "")).strip("/")
+            if not key:
+                continue
+            size = int(getattr(obj, "size", 0) or 0)
+            if key == current_prefix or (key.endswith("/") and size == 0):
+                continue
+            if current_prefix and not key.startswith(f"{current_prefix}/"):
+                continue
+            name = key.rsplit("/", 1)[-1]
+            if not name:
+                continue
+            page_items.append(
+                BrowserItem(
+                    name=name,
+                    kind="file",
+                    path=key,
+                    size=size,
+                    mtime=_remote_object_mtime(obj),
+                    etag=getattr(obj, "etag", None) or "",
+                    storage_class=getattr(obj, "storageClass", None) or getattr(obj, "storage_class", "") or "",
+                    raw=obj,
+                )
+            )
+
+        items.extend([item for item in page_items if _matches_filters(item, filter_terms)])
+        next_marker = getattr(body, "next_marker", None) or getattr(body, "nextMarker", None)
+        has_next = bool(getattr(body, "is_truncated", False) or next_marker)
+        if not filter_terms or not has_next or len(items) >= page * page_size:
+            break
+        marker = next_marker
+        kwargs["marker"] = marker
 
     items.sort(key=lambda item: (item.kind != "dir", item.name.lower()))
-    next_marker = getattr(body, "next_marker", None) or getattr(body, "nextMarker", None)
-    has_next = bool(getattr(body, "is_truncated", False) or next_marker)
+    if filter_terms:
+        total_known = len(items) if not has_next else None
+        start = (max(1, int(page or 1)) - 1) * page_size
+        end = start + page_size
+        page_items = items[start:end]
+        page_has_next = has_next or end < len(items)
+    else:
+        total_known = None
+        page_items = items
+        page_has_next = has_next
+
     return BrowserPage(
         scope="objects",
         bucket=bucket,
         prefix=current_prefix,
-        items=items,
+        items=page_items,
         page=page,
         page_size=page_size,
         next_marker=next_marker,
-        has_next=has_next,
+        total_known=total_known,
+        has_next=page_has_next,
     )
 
 
@@ -310,7 +363,7 @@ def count_remote_prefix_items(
 # ================================
 # 分页列举本地目录与文件
 # ================================
-def list_local_path(path, page=1, page_size=50):
+def list_local_path(path, page=1, page_size=50, filters=None):
     current_path = os.path.abspath(path or os.getcwd())
     if not os.path.exists(current_path):
         current_path = os.path.abspath(os.path.dirname(current_path) or os.getcwd())
@@ -335,6 +388,9 @@ def list_local_path(path, page=1, page_size=50):
                 )
             )
 
+    filter_terms = _normalize_filters(filters)
+    if filter_terms:
+        entries = [item for item in entries if _matches_filters(item, filter_terms)]
     entries.sort(key=lambda item: (item.kind != "dir", item.name.lower()))
     page = max(1, int(page or 1))
     page_size = max(1, int(page_size or 50))

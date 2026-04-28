@@ -29,6 +29,7 @@ except ImportError:
     class _PlainColor:
         BLACK = ""
         BLUE = ""
+        BRIGHT = ""
         CYAN = ""
         GREEN = ""
         LIGHTBLACK_EX = ""
@@ -68,6 +69,7 @@ from core import (
     parent_prefix,
     scan_local_sources,
     scan_s3_objects,
+    scan_s3_sources,
 )
 from core.obs_index import build_obs_index
 from core.utils import build_object_uri, detect_storage_scheme, parse_size, sanitize_key, setup_logger
@@ -87,6 +89,8 @@ LEGACY_TASK_SECTION = "TASK"
 
 MODE_LOCAL = "local"
 MODE_S3 = "s3"
+SOURCE_MODE_DIRECTORY = "directory"
+SOURCE_MODE_LIST = "list"
 
 SENSITIVE_FIELDS = {
     (SOURCE_SECTION, "ak"),
@@ -97,7 +101,9 @@ SENSITIVE_FIELDS = {
 
 CONFIG_DESC = {
     "SOURCE.type": "源端模式：local 或 s3",
+    "SOURCE.selection_mode": "源端选择模式：directory 目录模式（一对一）或 list 列表模式（多目录/文件/对象）",
     "SOURCE.path": "源端本地目录、单文件路径或通配符（source.type=local 时使用，例如 /data/202604*）",
+    "SOURCE.paths": "源端列表模式路径清单，每行一个本地文件/目录，或一个源端桶内前缀/对象（SOURCE.selection_mode=list 时使用）",
     "SOURCE.ak": "源端对象存储 AccessKey（source.type=s3 时使用）",
     "SOURCE.sk": "源端对象存储 SecretKey（source.type=s3 时使用）",
     "SOURCE.endpoint": "源端对象存储 Endpoint（source.type=s3 时使用，支持 OBS / 其他 S3 兼容服务）",
@@ -150,6 +156,7 @@ SECTION_TITLES = {
 }
 
 REMOTE_ENDPOINT_KEYS = ("ak", "sk", "endpoint", "bucket", "prefix")
+SOURCE_KEY_ORDER = ("type", "selection_mode", "path", "paths", "ak", "sk", "endpoint", "bucket", "prefix")
 
 CONFIG_MENU_GROUPS = [
     {"id": "source", "title": "源端配置", "sections": [SOURCE_SECTION]},
@@ -207,7 +214,9 @@ CONFIG_MENU_GROUP_INDEX = _build_config_menu_group_index(CONFIG_MENU_GROUPS)
 DEFAULT_CONFIG = {
     SOURCE_SECTION: {
         "type": MODE_LOCAL,
+        "selection_mode": SOURCE_MODE_DIRECTORY,
         "path": "",
+        "paths": "",
         "ak": "",
         "sk": "",
         "endpoint": "",
@@ -768,6 +777,31 @@ def _normalize_mode(value, default=None):
 
 
 # ================================
+# 归一化源端选择模式
+# ================================
+def _normalize_source_selection_mode(value, default=SOURCE_MODE_DIRECTORY):
+    if value is None:
+        return default
+
+    text = str(value).strip().lower()
+    if not text:
+        return default
+
+    mapping = {
+        "1": SOURCE_MODE_DIRECTORY,
+        "dir": SOURCE_MODE_DIRECTORY,
+        "directory": SOURCE_MODE_DIRECTORY,
+        "目录": SOURCE_MODE_DIRECTORY,
+        "目录模式": SOURCE_MODE_DIRECTORY,
+        "2": SOURCE_MODE_LIST,
+        "list": SOURCE_MODE_LIST,
+        "列表": SOURCE_MODE_LIST,
+        "列表模式": SOURCE_MODE_LIST,
+    }
+    return mapping.get(text)
+
+
+# ================================
 # 交互选择模式
 # ================================
 def _prompt_mode(section_label, current_value, allow_empty=False):
@@ -787,6 +821,28 @@ def _prompt_mode(section_label, current_value, allow_empty=False):
             return normalized
 
         print("请输入 local / s3，或者输入 1 / 2。")
+
+
+# ================================
+# 交互选择源端选择模式
+# ================================
+def _prompt_source_selection_mode(current_value, allow_empty=False):
+    current_value = _normalize_source_selection_mode(current_value, default=SOURCE_MODE_DIRECTORY)
+
+    while True:
+        print("\n请选择源端选择模式：")
+        print("1. directory（目录模式，保持当前一对一迁移）")
+        print("2. list（列表模式，可添加多个目录/文件/对象）")
+        raw = _read_input(f"SOURCE.selection_mode [{current_value}]: ").strip()
+
+        if not raw and allow_empty:
+            return current_value
+
+        normalized = _normalize_source_selection_mode(raw, default=current_value if allow_empty else None)
+        if normalized in {SOURCE_MODE_DIRECTORY, SOURCE_MODE_LIST}:
+            return normalized
+
+        print("请输入 directory / list，或者输入 1 / 2。")
 
 
 # ================================
@@ -843,10 +899,30 @@ def _hidden_keys_for_section(cfg, section):
     current_mode = _normalize_mode(cfg.get(section, "type", fallback=default_mode), default=default_mode)
 
     if current_mode == MODE_LOCAL:
-        return {key for key in REMOTE_ENDPOINT_KEYS if key in cfg[section]}
+        hidden = {key for key in REMOTE_ENDPOINT_KEYS if key in cfg[section]}
+        if section == SOURCE_SECTION:
+            source_selection_mode = _normalize_source_selection_mode(
+                cfg.get(section, "selection_mode", fallback=SOURCE_MODE_DIRECTORY),
+                default=SOURCE_MODE_DIRECTORY,
+            )
+            if source_selection_mode == SOURCE_MODE_LIST:
+                hidden.add("path")
+            else:
+                hidden.add("paths")
+        return hidden
 
     if current_mode == MODE_S3:
-        return {"path"} if "path" in cfg[section] else set()
+        hidden = {"path"} if "path" in cfg[section] else set()
+        if section == SOURCE_SECTION:
+            selection_mode = _normalize_source_selection_mode(
+                cfg.get(section, "selection_mode", fallback=SOURCE_MODE_DIRECTORY),
+                default=SOURCE_MODE_DIRECTORY,
+            )
+            if selection_mode == SOURCE_MODE_LIST:
+                hidden.add("prefix")
+            else:
+                hidden.add("paths")
+        return hidden
 
     return set()
 
@@ -856,7 +932,12 @@ def _hidden_keys_for_section(cfg, section):
 # ================================
 def _visible_items_for_section(cfg, section):
     hidden_keys = _hidden_keys_for_section(cfg, section)
-    return [(key, value) for key, value in cfg[section].items() if key not in hidden_keys]
+    items = [(key, value) for key, value in cfg[section].items() if key not in hidden_keys]
+    if section != SOURCE_SECTION:
+        return items
+
+    order_map = {key: index for index, key in enumerate(SOURCE_KEY_ORDER)}
+    return sorted(items, key=lambda item: (order_map.get(item[0], len(order_map)), item[0]))
 
 
 # ================================
@@ -870,10 +951,24 @@ def _section_display_hint(cfg, section):
     current_mode = _normalize_mode(cfg.get(section, "type", fallback=default_mode), default=default_mode)
     hidden_count = len(_hidden_keys_for_section(cfg, section))
 
-    if hidden_count > 0:
-        return f"当前模式：{current_mode}，仅显示生效项，已折叠 {hidden_count} 项"
+    source_selection_mode = ""
+    if section == SOURCE_SECTION and current_mode == MODE_LOCAL:
+        source_selection_mode = _normalize_source_selection_mode(
+            cfg.get(section, "selection_mode", fallback=SOURCE_MODE_DIRECTORY),
+            default=SOURCE_MODE_DIRECTORY,
+        )
+    elif section == SOURCE_SECTION and current_mode == MODE_S3:
+        source_selection_mode = _normalize_source_selection_mode(
+            cfg.get(section, "selection_mode", fallback=SOURCE_MODE_DIRECTORY),
+            default=SOURCE_MODE_DIRECTORY,
+        )
 
-    return f"当前模式：{current_mode}"
+    shown_mode = f"{current_mode}/{source_selection_mode}" if source_selection_mode else current_mode
+
+    if hidden_count > 0:
+        return f"当前模式：{shown_mode}，仅显示生效项，已折叠 {hidden_count} 项"
+
+    return f"当前模式：{shown_mode}"
 
 
 # ================================
@@ -964,6 +1059,85 @@ def _fit_display(text, width):
 
 
 # ================================
+# 渲染彩色文本片段
+# ================================
+def _style_text(text, color=""):
+    if not color:
+        return str(text)
+    return f"{color}{text}{Style.RESET_ALL}"
+
+
+# ================================
+# 生成 256 色前景色
+# ================================
+def _ansi256(code):
+    return f"\033[38;5;{int(code)}m"
+
+
+# ================================
+# 菜单调色板
+# ================================
+MENU_COLOR_BORDER = _ansi256(39)
+MENU_COLOR_TITLE = _ansi256(45)
+MENU_COLOR_HOTKEY = _ansi256(226)
+MENU_COLOR_ACTION = _ansi256(118)
+MENU_COLOR_MODE = _ansi256(81)
+MENU_COLOR_LIST = _ansi256(213)
+MENU_COLOR_PARAM = _ansi256(220)
+MENU_COLOR_KEY = _ansi256(117)
+MENU_COLOR_DESC = _ansi256(222)
+MENU_COLOR_VALUE = _ansi256(255)
+MENU_COLOR_MUTED = _ansi256(245)
+MENU_COLOR_TRUE = _ansi256(82)
+MENU_COLOR_FALSE = _ansi256(203)
+MENU_COLOR_PATH = _ansi256(159)
+
+
+# ================================
+# 高亮颜色
+# ================================
+def _bright(color):
+    return f"{getattr(Style, 'BRIGHT', '')}{color}"
+
+
+# ================================
+# 判断是否为彩色片段行
+# ================================
+def _is_segment_line(line):
+    return isinstance(line, list)
+
+
+# ================================
+# 提取彩色片段纯文本
+# ================================
+def _segments_text(segments):
+    return "".join(str(part[0]) for part in segments)
+
+
+# ================================
+# 构建彩色盒子内容行
+# ================================
+def _box_line_segments(segments, width):
+    inside_width = max(width - 4, 0)
+    plain_text = _segments_text(segments)
+    visible_text = _truncate_display(plain_text, inside_width)
+    remaining = _display_width(visible_text)
+    rendered_parts = []
+
+    for text, color in segments:
+        if remaining <= 0:
+            break
+        clipped = _truncate_display(text, remaining)
+        if not clipped:
+            continue
+        rendered_parts.append(_style_text(clipped, color))
+        remaining -= _display_width(clipped)
+
+    padding = " " * max(inside_width - _display_width(visible_text), 0)
+    return f"{MENU_COLOR_BORDER}│{Style.RESET_ALL} {''.join(rendered_parts)}{padding} {MENU_COLOR_BORDER}│{Style.RESET_ALL}"
+
+
+# ================================
 # 格式化布尔值
 # ================================
 def _format_bool_text(value):
@@ -1023,10 +1197,21 @@ def _box_line(text, width):
 
 
 # ================================
+# 构建彩色文本盒子内容行
+# ================================
+def _box_line_colored(text, width, color):
+    inside_width = max(width - 4, 0)
+    content = _fit_display(text, inside_width)
+    return f"{MENU_COLOR_BORDER}│{Style.RESET_ALL} {color}{content}{Style.RESET_ALL} {MENU_COLOR_BORDER}│{Style.RESET_ALL}"
+
+
+# ================================
 # 渲染文本盒子
 # ================================
 def _print_box(title, body_lines, footer_lines=None, subtitle_lines=None):
     def line_text(line):
+        if _is_segment_line(line):
+            return _segments_text(line)
         if isinstance(line, tuple):
             return line[0]
         return line
@@ -1044,30 +1229,42 @@ def _print_box(title, body_lines, footer_lines=None, subtitle_lines=None):
         lines.extend(line_text(line) for line in footer_lines)
 
     width = _resolve_box_width(title, lines)
-    print(f"{Fore.CYAN}{_box_border(title, width, top=True)}{Style.RESET_ALL}")
+    print(f"{MENU_COLOR_BORDER}{_box_border(title, width, top=True)}{Style.RESET_ALL}")
 
     if subtitle_lines:
         for line in subtitle_lines:
+            if _is_segment_line(line):
+                print(_box_line_segments(line, width))
+                continue
             text = line_text(line)
             color = line_color(line, Fore.LIGHTBLACK_EX)
-            print(f"{color}{_box_line(text, width)}{Style.RESET_ALL}")
+            print(_box_line_colored(text, width, color))
         if body_lines or footer_lines:
-            print(f"{Fore.CYAN}{_box_separator(width)}{Style.RESET_ALL}")
+            print(f"{MENU_COLOR_BORDER}{_box_separator(width)}{Style.RESET_ALL}")
 
     for line in body_lines:
+        if _is_segment_line(line):
+            print(_box_line_segments(line, width))
+            continue
         text = line_text(line)
         color = line_color(line, Fore.WHITE)
-        print(f"{color}{_box_line(text, width)}{Style.RESET_ALL}")
+        print(_box_line_colored(text, width, color))
 
     if footer_lines:
         if body_lines:
-            print(f"{Fore.CYAN}{_box_separator(width)}{Style.RESET_ALL}")
+            print(f"{MENU_COLOR_BORDER}{_box_separator(width)}{Style.RESET_ALL}")
         for line in footer_lines:
+            if _is_segment_line(line):
+                print(_box_line_segments(line, width))
+                continue
             text = line_text(line)
+            if "[" in str(text) and "]" in str(text):
+                print(_box_line_segments(_hotkey_segments(text), width))
+                continue
             color = line_color(line, Fore.GREEN)
-            print(f"{color}{_box_line(text, width)}{Style.RESET_ALL}")
+            print(_box_line_colored(text, width, color))
 
-    print(f"{Fore.CYAN}{_box_border(title, width, top=False)}{Style.RESET_ALL}")
+    print(f"{MENU_COLOR_BORDER}{_box_border(title, width, top=False)}{Style.RESET_ALL}")
 
 
 # ================================
@@ -1163,13 +1360,197 @@ def _save_browser_selection(cfg, section, bucket=None, prefix=None, path=None):
     print(f"\n已保存到 {resolve_config_file()}\n")
 
 
+# ================================
+# 读取源端列表
+# ================================
+def _source_path_list(cfg):
+    return parse_source_path_list(cfg.get(SOURCE_SECTION, "paths", fallback=""))
+
+
+# ================================
+# 写回源端列表
+# ================================
+def _set_source_path_list(cfg, paths):
+    cfg[SOURCE_SECTION]["paths"] = serialize_source_path_list(paths)
+    write_config_with_comments(cfg)
+
+
+# ================================
+# 添加源端列表项
+# ================================
+def _add_source_path_to_list(cfg, path):
+    paths = _source_path_list(cfg)
+    normalized = os.path.normcase(os.path.abspath(os.path.expanduser(path)))
+    if any(os.path.normcase(os.path.abspath(os.path.expanduser(item))) == normalized for item in paths):
+        print(f"\n已在列表中：{path}\n")
+        return
+    paths.append(path)
+    _set_source_path_list(cfg, paths)
+    print(f"\n已添加到源端列表：{path}\n")
+
+
+# ================================
+# 清空源端列表
+# ================================
+def _clear_source_path_list(cfg):
+    _set_source_path_list(cfg, [])
+    print("\n源端列表已清空。\n")
+
+
+# ================================
+# 删除源端列表项
+# ================================
+def _remove_source_path_from_list(cfg, index):
+    paths = _source_path_list(cfg)
+    if index < 1 or index > len(paths):
+        print("\n编号不存在。\n")
+        return
+
+    removed = paths.pop(index - 1)
+    _set_source_path_list(cfg, paths)
+    print(f"\n已从源端列表删除：{removed}\n")
+
+
+# ================================
+# 生成源端列表展示行
+# ================================
+def _source_path_list_lines(cfg):
+    paths = _source_path_list(cfg)
+    if not paths:
+        return ["(源端列表为空)"]
+
+    source_type = _normalize_mode(cfg.get(SOURCE_SECTION, "type", fallback=MODE_LOCAL), default=MODE_LOCAL)
+    rows = []
+    for index, path in enumerate(paths, start=1):
+        if source_type == MODE_S3:
+            kind = "前缀/对象"
+        else:
+            kind = "目录" if os.path.isdir(path) else "文件" if os.path.isfile(path) else "不存在"
+        rows.append(f"{index}. [{kind}] {_shorten_text(path, 74)}")
+    return rows
+
+
+# ================================
+# 展示源端列表
+# ================================
+def show_source_path_list(cfg):
+    _print_box(
+        "源端列表",
+        _source_path_list_lines(cfg),
+        footer_lines=["[A] 添加路径    [D] 删除路径    [C] 清空列表    [B] 返回上一级"],
+        subtitle_lines=["列表模式会迁移这里的所有源端条目；本地可填文件/目录，S3 可填桶内前缀/对象。"],
+    )
+
+
+# ================================
+# 管理源端列表
+# ================================
+def prompt_source_path_list_action(cfg):
+    while True:
+        show_source_path_list(cfg)
+        paths = _source_path_list(cfg)
+        list_action = _read_menu_input(
+            "\n按 A 添加路径，D 删除路径，C 清空列表，B 返回: ",
+            hotkeys={"a", "d", "c", "b"},
+        ).strip().lower()
+
+        if list_action == "b":
+            return
+
+        if list_action == "a":
+            path_value = _read_input("请输入要添加的源端路径/前缀/对象: ").strip()
+            if path_value:
+                _add_source_path_to_list(cfg, path_value)
+            continue
+
+        if list_action == "d":
+            if not paths:
+                print("\n源端列表为空，无需删除。\n")
+                continue
+            raw_index = _read_menu_input(
+                "请输入要删除的编号，或按 B 取消: ",
+                hotkeys={"b"},
+                max_number=len(paths),
+            ).strip().lower()
+            if raw_index == "b":
+                continue
+            if raw_index.isdigit():
+                _remove_source_path_from_list(cfg, int(raw_index))
+            continue
+
+        if list_action == "c":
+            confirm = _read_menu_input("确认清空源端列表? (y/N): ", hotkeys={"y", "n"}).strip().lower()
+            if confirm in {"y", "yes"}:
+                _clear_source_path_list(cfg)
+
+
+# ================================
+# 解析浏览器序号输入
+# ================================
+def _parse_item_indexes(raw_value, max_number):
+    indexes = []
+    seen = set()
+    for chunk in re.split(r"[,，\s]+", str(raw_value or "").strip()):
+        if not chunk:
+            continue
+        match = re.match(r"^(\d+)\s*[-~～]\s*(\d+)$", chunk)
+        if match:
+            start = int(match.group(1))
+            end = int(match.group(2))
+            if start > end:
+                start, end = end, start
+            values = range(start, end + 1)
+        elif chunk.isdigit():
+            values = [int(chunk)]
+        else:
+            continue
+        for value in values:
+            if 1 <= value <= max_number and value not in seen:
+                indexes.append(value - 1)
+                seen.add(value)
+    return indexes
+
+
+# ================================
+# 添加浏览器中指定条目
+# ================================
+def _prompt_add_browser_items_to_list(cfg, page, label="文件/目录"):
+    items = page.items or []
+    if not items:
+        print("\n当前没有可添加的条目。\n")
+        return
+    raw_value = _read_input(f"请输入要添加的{label}序号（支持空格/逗号/范围，如 1 3 5-8）: ").strip()
+    indexes = _parse_item_indexes(raw_value, len(items))
+    if not indexes:
+        print("\n未选择有效序号。\n")
+        return
+    for index in indexes:
+        _add_source_path_to_list(cfg, items[index].path)
+
+
+# ================================
+# 输入浏览器筛选条件
+# ================================
+def _prompt_filter_terms(current_filter):
+    prompt = "筛选关键字（多个用空格分隔，空值清除）"
+    if current_filter:
+        prompt += f" [{current_filter}]"
+    prompt += ": "
+    return _read_input(prompt).strip()
+
+
 def browse_local_config(cfg, section, page_size=30):
     current_path = cfg.get(section, "path", fallback="").strip() or os.getcwd()
     page_no = 1
+    filters = ""
+    is_source_list_mode = (
+        section == SOURCE_SECTION
+        and get_source_selection_mode(cfg) == SOURCE_MODE_LIST
+    )
 
     while True:
         try:
-            page = list_local_path(current_path, page=page_no, page_size=page_size)
+            page = list_local_path(current_path, page=page_no, page_size=page_size, filters=filters)
         except Exception as exc:
             print(f"无法读取本地目录: {exc}")
             return
@@ -1177,21 +1558,45 @@ def browse_local_config(cfg, section, page_size=30):
         subtitle_lines = [
             (f"当前位置: {_shorten_text(page.path, 72)}", Fore.YELLOW),
             (_browser_count_text(page), Fore.MAGENTA),
-            "目录可进入；S 保存当前目录；B 上一层；N/P 翻页；Q 返回。",
         ]
-        footer = ["[S] 保存当前目录    [B] 上一层    [N] 下一页    [P] 上一页    [Q] 返回"]
+        if filters:
+            subtitle_lines.append((f"筛选: {filters}", Fore.CYAN))
+        if is_source_list_mode:
+            subtitle_lines.append("编号进入目录；F 添加指定文件/目录到迁移列表；A 添加当前目录；K 筛选。")
+            footer = [
+                _hotkey_segments("[F] 添加指定项至迁移列表    [A] 添加当前目录至迁移列表"),
+                _hotkey_segments("[K] 筛选    [B] 上一层/返回    [N] 下一页    [P] 上一页"),
+            ]
+            hotkeys = {"f", "a", "k", "b", "n", "p"}
+            prompt_text = "\n选择编号进入目录，或按 F/A/K/B/N/P: "
+        else:
+            subtitle_lines.append("目录可进入；S 保存当前目录；K 筛选；B 上一层/返回；N/P 翻页。")
+            footer = ["[S] 保存当前目录    [K] 筛选    [B] 上一层/返回    [N] 下一页    [P] 上一页"]
+            hotkeys = {"s", "k", "b", "n", "p"}
+            prompt_text = "\n选择编号，或按 S/K/B/N/P: "
         _print_box("本地目录浏览", _browser_lines(page), footer_lines=footer, subtitle_lines=subtitle_lines)
 
         answer = _read_menu_input(
-            "\n选择编号，或按 S/B/N/P/Q: ",
-            hotkeys={"s", "b", "n", "p", "q"},
+            prompt_text,
+            hotkeys=hotkeys,
             max_number=len(page.items or []),
         ).strip()
         lowered = answer.lower()
 
-        if lowered == "q":
-            return
+        if lowered == "k":
+            filters = _prompt_filter_terms(filters)
+            page_no = 1
+            continue
+        if lowered == "f" and is_source_list_mode:
+            _prompt_add_browser_items_to_list(cfg, page)
+            continue
+        if lowered == "a" and is_source_list_mode:
+            _add_source_path_to_list(cfg, page.path)
+            continue
         if lowered == "s":
+            if is_source_list_mode:
+                print("列表模式请使用 A 添加当前目录，或选择编号添加文件/目录。")
+                continue
             _save_browser_selection(cfg, section, path=page.path)
             return
         if lowered == "b":
@@ -1199,6 +1604,9 @@ def browse_local_config(cfg, section, page_size=30):
             if parent and parent != page.path:
                 current_path = parent
                 page_no = 1
+                filters = ""
+            else:
+                return
             continue
         if lowered == "n":
             if page.has_next:
@@ -1211,14 +1619,26 @@ def browse_local_config(cfg, section, page_size=30):
             item_index = int(answer) - 1
             if 0 <= item_index < len(page.items):
                 item = page.items[item_index]
+                if is_source_list_mode:
+                    if item.kind == "dir":
+                        current_path = item.path
+                        page_no = 1
+                        filters = ""
+                    else:
+                        print("列表模式请按 F 后输入文件序号添加指定文件。")
+                    continue
                 if item.kind == "dir":
                     current_path = item.path
                     page_no = 1
+                    filters = ""
                 else:
                     print("文件仅展示属性，请选择目录进入或保存当前目录。")
             continue
 
-        print("请输入有效编号，或输入 S / B / N / P / Q。")
+        if is_source_list_mode:
+            print("请输入有效编号，或输入 F / A / K / B / N / P。")
+        else:
+            print("请输入有效编号，或输入 S / K / B / N / P。")
 
 
 def browse_remote_config(cfg, section, page_size=30):
@@ -1243,9 +1663,14 @@ def browse_remote_config(cfg, section, page_size=30):
         return
 
     mode = "objects" if bucket else "buckets"
+    is_source_list_mode = (
+        section == SOURCE_SECTION
+        and get_source_selection_mode(cfg) == SOURCE_MODE_LIST
+    )
     bucket_page_no = 1
     object_page_no = 1
     object_markers = [None]
+    filters = ""
     object_count_cache = {}
     object_count_threads = {}
 
@@ -1276,7 +1701,9 @@ def browse_remote_config(cfg, section, page_size=30):
             if mode == "buckets":
                 page = list_remote_buckets(client, page=bucket_page_no, page_size=page_size)
             else:
-                marker = object_markers[object_page_no - 1] if object_page_no - 1 < len(object_markers) else None
+                marker = None if filters else (
+                    object_markers[object_page_no - 1] if object_page_no - 1 < len(object_markers) else None
+                )
                 page = list_remote_prefix(
                     client,
                     bucket,
@@ -1284,6 +1711,7 @@ def browse_remote_config(cfg, section, page_size=30):
                     marker=marker,
                     page=object_page_no,
                     page_size=page_size,
+                    filters=filters,
                 )
         except Exception as exc:
             print(f"远端列表读取失败: {exc}")
@@ -1311,14 +1739,26 @@ def browse_remote_config(cfg, section, page_size=30):
 
         subtitle_lines = [
             (f"Endpoint: {_shorten_text(endpoint, 72)}", Fore.LIGHTBLACK_EX),
-            "选择目录可进入；目录列表大于10需要手动键入回车跳转\nS 保存当前桶/目录；B 上一层；N/P 翻页；Q 返回。",
+            "选择目录可进入；目录列表大于10需要手动键入回车跳转\nS 保存当前桶/目录；列表模式下 F 添加指定目录/对象，A 添加当前位置。",
         ]
         if mode == "buckets":
             subtitle_lines.append((_browser_count_text(page, total=total_items), Fore.MAGENTA))
         else:
             subtitle_lines.append((f"当前: {bucket}/{prefix or '/'}", Fore.YELLOW))
             subtitle_lines.append((_browser_count_text(page, total=total_items), Fore.MAGENTA))
-        footer = ["[S] 保存当前位置到配置文件    [B] 上一层    [N] 下一页    [P] 上一页    [R] 刷新    [Q] 返回"]
+            if filters:
+                subtitle_lines.append((f"筛选: {filters}", Fore.CYAN))
+        if is_source_list_mode:
+            footer = [
+                _hotkey_segments("[F] 添加指定项至迁移列表    [A] 添加当前位置至迁移列表"),
+                _hotkey_segments("[K] 筛选    [B] 上一层/返回    [N] 下一页    [P] 上一页    [R] 刷新"),
+            ]
+            hotkeys = {"f", "a", "k", "b", "n", "p", "r"}
+            prompt_text = "\n选择编号进入目录，或按 F/A/K/B/N/P/R: "
+        else:
+            footer = ["[S] 保存当前位置到配置文件    [K] 筛选    [B] 上一层/返回    [N] 下一页    [P] 上一页    [R] 刷新"]
+            hotkeys = {"s", "k", "b", "n", "p", "r"}
+            prompt_text = "\n选择编号，或按 S/K/B/N/P/R: "
         _print_box(
             _remote_browser_title(section, bucket if mode == "objects" else "", prefix),
             _browser_lines(page),
@@ -1327,17 +1767,38 @@ def browse_remote_config(cfg, section, page_size=30):
         )
 
         answer = _read_menu_input(
-            "\n选择编号，或按 S/B/N/P/R/Q: ",
-            hotkeys={"s", "b", "n", "p", "r", "q"},
+            prompt_text,
+            hotkeys=hotkeys,
             max_number=len(page.items or []),
         ).strip()
         lowered = answer.lower()
 
-        if lowered == "q":
-            return
         if lowered == "r":
             continue
+        if lowered == "k":
+            if mode == "buckets":
+                print("请先选择一个桶，进入后再筛选目录/对象。")
+            else:
+                filters = _prompt_filter_terms(filters)
+                object_page_no = 1
+                object_markers = [None]
+            continue
+        if lowered == "f" and is_source_list_mode:
+            if mode == "buckets":
+                print("请先选择一个桶，进入后再添加。")
+            else:
+                _prompt_add_browser_items_to_list(cfg, page, label="目录/对象")
+            continue
+        if lowered == "a" and is_source_list_mode:
+            if mode == "buckets":
+                print("请先选择一个桶，进入后再添加。")
+            else:
+                _add_source_path_to_list(cfg, prefix or "")
+            continue
         if lowered == "s":
+            if is_source_list_mode:
+                print("列表模式请使用 A 添加当前位置，或选择编号添加目录/对象。")
+                continue
             if mode == "buckets":
                 print("请先选择一个桶，进入后再保存。")
             else:
@@ -1352,9 +1813,11 @@ def browse_remote_config(cfg, section, page_size=30):
                 prefix = parent
                 object_page_no = 1
                 object_markers = [None]
+                filters = ""
             else:
                 mode = "buckets"
                 bucket_page_no = 1
+                filters = ""
             continue
         if lowered == "n":
             if page.has_next:
@@ -1379,15 +1842,23 @@ def browse_remote_config(cfg, section, page_size=30):
                     mode = "objects"
                     object_page_no = 1
                     object_markers = [None]
+                    filters = ""
                 elif item.kind == "dir":
                     prefix = item.path
                     object_page_no = 1
                     object_markers = [None]
+                    filters = ""
                 else:
+                    if is_source_list_mode:
+                        print("列表模式请按 F 后输入对象序号添加指定对象。")
+                        continue
                     print("文件仅展示属性，请选择目录进入或保存当前目录。")
             continue
 
-        print("请输入有效编号，或输入 S / B / N / P / Q。")
+        if is_source_list_mode:
+            print("请输入有效编号，或输入 F / A / K / B / N / P / R。")
+        else:
+            print("请输入有效编号，或输入 S / K / B / N / P / R。")
 
 
 def browse_storage_config(cfg, group_id):
@@ -1432,12 +1903,17 @@ def _group_items(cfg, group_id):
 # ================================
 # 生成存储端简要摘要
 # ================================
-def _storage_summary(mode, path_value, endpoint, bucket, prefix):
+def _storage_summary(mode, path_value, endpoint, bucket, prefix, selection_mode=SOURCE_MODE_DIRECTORY, paths_value=""):
     normalized_mode = _normalize_mode(mode, default=MODE_LOCAL) or MODE_LOCAL
+    normalized_selection_mode = _normalize_source_selection_mode(selection_mode, default=SOURCE_MODE_DIRECTORY)
     if normalized_mode == MODE_LOCAL:
+        if normalized_selection_mode == SOURCE_MODE_LIST:
+            return f"local/list | {len(parse_source_path_list(paths_value))} 项"
         return f"local | {_shorten_text(path_value or '-', 56)}"
 
     scheme = detect_storage_scheme(endpoint, fallback="s3")
+    if normalized_selection_mode == SOURCE_MODE_LIST:
+        return f"{normalized_mode}/list | {bucket or '-'} | {len(parse_source_path_list(paths_value))} 项"
     uri = build_object_uri(bucket, prefix, scheme=scheme)
     return f"{normalized_mode} | {_shorten_text(uri, 56)}"
 
@@ -1453,6 +1929,8 @@ def _group_summary(cfg, group_id):
             cfg.get(SOURCE_SECTION, "endpoint", fallback=""),
             cfg.get(SOURCE_SECTION, "bucket", fallback=""),
             cfg.get(SOURCE_SECTION, "prefix", fallback=""),
+            cfg.get(SOURCE_SECTION, "selection_mode", fallback=SOURCE_MODE_DIRECTORY),
+            cfg.get(SOURCE_SECTION, "paths", fallback=""),
         )
 
     if group_id == "target":
@@ -1510,6 +1988,64 @@ def _group_summary(cfg, group_id):
 
 
 # ================================
+# 为摘要片段配色
+# ================================
+def _summary_segments(summary):
+    parts = str(summary or "").split(" | ")
+    segments = []
+    for index, part in enumerate(parts):
+        if index > 0:
+            segments.append((" | ", Fore.LIGHTBLACK_EX))
+
+        if index == 0:
+            color = _bright(MENU_COLOR_MODE)
+        elif part.endswith("项"):
+            color = _bright(MENU_COLOR_LIST)
+        elif "=" in part:
+            color = _bright(MENU_COLOR_PARAM)
+        else:
+            color = MENU_COLOR_VALUE
+        segments.append((part, color))
+    return segments
+
+
+# ================================
+# 为配置值选择颜色
+# ================================
+def _config_value_color(key, value):
+    text = str(value or "").strip().lower()
+    if key == "selection_mode":
+        return _bright(MENU_COLOR_LIST if text == SOURCE_MODE_LIST else MENU_COLOR_MODE)
+    if key in {"type", "selection_mode", "target_compare_mode", "verify_after_upload", "language"}:
+        return _bright(MENU_COLOR_MODE)
+    if text in {"true", "false"}:
+        return _bright(MENU_COLOR_TRUE if text == "true" else MENU_COLOR_FALSE)
+    if text.endswith("项"):
+        return _bright(MENU_COLOR_LIST)
+    if re.match(r"^\d+(\.\d+)?[a-z]*$", text):
+        return _bright(MENU_COLOR_PARAM)
+    if text and text not in {"-", "(空)"}:
+        return _bright(MENU_COLOR_PATH if ("\\" in text or "/" in text) else MENU_COLOR_VALUE)
+    return MENU_COLOR_MUTED
+
+
+# ================================
+# 渲染快捷键提示片段
+# ================================
+def _hotkey_segments(text):
+    segments = []
+    cursor = 0
+    for match in re.finditer(r"\[[A-Z]\]", str(text or "")):
+        if match.start() > cursor:
+            segments.append((text[cursor:match.start()], MENU_COLOR_ACTION))
+        segments.append((match.group(0), _bright(MENU_COLOR_HOTKEY)))
+        cursor = match.end()
+    if cursor < len(text):
+        segments.append((text[cursor:], MENU_COLOR_ACTION))
+    return segments or [(str(text or ""), MENU_COLOR_ACTION)]
+
+
+# ================================
 # 展示折叠菜单
 # ================================
 def show_config_menu(cfg):
@@ -1519,8 +2055,15 @@ def show_config_menu(cfg):
     for index, group in enumerate(CONFIG_MENU_GROUPS, start=1):
         title = group["title"]
         summary = _group_summary(cfg, group["id"])
-        line = f"{index}. {_fit_display(f'[{title}]', title_width + 2)}  {_shorten_text(summary, 56)}"
-        body_lines.append(line)
+        title_text = _fit_display(f"[{title}]", title_width + 2)
+        body_lines.append(
+            [
+                (f"{index}. ", Fore.WHITE),
+                (title_text, _bright(MENU_COLOR_TITLE)),
+                ("  ", Fore.WHITE),
+                *_summary_segments(_shorten_text(summary, 56)),
+            ]
+        )
         mapping[str(index)] = group["id"]
 
     subtitle_lines = [
@@ -1549,23 +2092,42 @@ def show_config_group(cfg, group_id):
     body_lines = []
     for index, (section, key, value) in enumerate(_group_items(cfg, group_id), start=1):
         shown_value = mask_secret(value) if _is_sensitive(section, key) else value
+        if section == SOURCE_SECTION and key == "paths":
+            paths = parse_source_path_list(value)
+            shown_value = f"{len(paths)} 项" if paths else "(空)"
         if key in {"rate_limit", "rate_limit_burst"} and shown_value not in {"", None}:
             shown_value = f"{shown_value} req/s"
 
         desc = CONFIG_DESC.get(f"{section}.{key}", "")
         if desc:
-            body_lines.append(f"{index}. {desc}")
-            body_lines.append(f"   └─ {key} = {shown_value}")
+            body_lines.append([(f"{index}. ", Fore.WHITE), (desc, _bright(MENU_COLOR_DESC))])
+            body_lines.append(
+                [
+                    ("   └─ ", MENU_COLOR_MUTED),
+                    (key, _bright(MENU_COLOR_KEY)),
+                    (" = ", MENU_COLOR_MUTED),
+                    (str(shown_value), _config_value_color(key, shown_value)),
+                ]
+            )
         else:
-            body_lines.append(f"{index}. {key} = {shown_value}")
+            body_lines.append(
+                [
+                    (f"{index}. ", Fore.WHITE),
+                    (key, _bright(MENU_COLOR_KEY)),
+                    (" = ", MENU_COLOR_MUTED),
+                    (str(shown_value), _config_value_color(key, shown_value)),
+                ]
+            )
 
         mapping[str(index)] = (section, key)
 
-    subtitle_lines = [_group_summary(cfg, group_id)]
+    subtitle_lines = [_summary_segments(_group_summary(cfg, group_id))]
     if section_hint:
         subtitle_lines.append(section_hint)
 
-    if group_id in {"source", "target"}:
+    if group_id == "source":
+        footer_lines = ["[O] 浏览桶/目录    [B] 返回上一级    [Y] 启动迁移程序    [Q] 退出程序"]
+    elif group_id == "target":
         footer_lines = ["[O] 浏览桶/目录    [B] 返回上一级    [Y] 启动迁移程序    [Q] 退出程序"]
     else:
         footer_lines = ["[B] 返回上一级    [Y] 启动迁移程序    [Q] 退出程序"]
@@ -1580,7 +2142,13 @@ def show_config_group(cfg, group_id):
 def edit_config_group(cfg, group_id):
     while True:
         mapping = show_config_group(cfg, group_id)
-        if group_id in {"source", "target"}:
+        if group_id == "source":
+            answer = _read_menu_input(
+                "\n请选择编号，或按 O/B/Y/Q: ",
+                hotkeys={"o", "b", "y", "q"},
+                max_number=len(mapping),
+            ).strip()
+        elif group_id == "target":
             answer = _read_menu_input(
                 "\n请选择编号，或按 O/B/Y/Q: ",
                 hotkeys={"o", "b", "y", "q"},
@@ -1609,7 +2177,10 @@ def edit_config_group(cfg, group_id):
 
         if answer not in mapping:
             if group_id in {"source", "target"}:
-                print("请输入有效编号，或输入 O / B / Y / Q。")
+                if group_id == "source":
+                    print("请输入有效编号，或输入 O / B / Y / Q。")
+                else:
+                    print("请输入有效编号，或输入 O / B / Y / Q。")
             else:
                 print("请输入有效编号，或输入 B / Y / Q。")
             continue
@@ -1625,6 +2196,11 @@ def edit_config_group(cfg, group_id):
         if key == "type" and section in {SOURCE_SECTION, TARGET_SECTION}:
             section_label = "source" if section == SOURCE_SECTION else "target"
             new_value = _prompt_mode(section_label, cfg.get(section, key, fallback=MODE_LOCAL), allow_empty=True)
+        elif key == "selection_mode" and section == SOURCE_SECTION:
+            new_value = _prompt_source_selection_mode(cfg.get(section, key, fallback=SOURCE_MODE_DIRECTORY), allow_empty=True)
+        elif key == "paths" and section == SOURCE_SECTION:
+            prompt_source_path_list_action(cfg)
+            continue
         else:
             new_value = _read_input("新值: ").strip()
 
@@ -1685,6 +2261,60 @@ def _source_label(source_type, source_path, source_bucket, source_prefix):
 
     prefix = source_prefix.strip("/") or "_root_"
     return f"{source_bucket}/{prefix}"
+
+
+# ================================
+# 解析本地源端列表
+# ================================
+def parse_source_path_list(value):
+    paths = []
+    seen = set()
+    for raw_line in str(value or "").splitlines():
+        path_value = raw_line.strip()
+        if not path_value:
+            continue
+        key = os.path.normcase(os.path.abspath(os.path.expanduser(path_value)))
+        if key in seen:
+            continue
+        seen.add(key)
+        paths.append(path_value)
+    return paths
+
+
+# ================================
+# 序列化本地源端列表
+# ================================
+def serialize_source_path_list(paths):
+    return "\n".join(str(item).strip() for item in paths if str(item).strip())
+
+
+# ================================
+# 获取源端选择模式
+# ================================
+def get_source_selection_mode(cfg):
+    return _normalize_source_selection_mode(
+        cfg.get(SOURCE_SECTION, "selection_mode", fallback=SOURCE_MODE_DIRECTORY),
+        default=SOURCE_MODE_DIRECTORY,
+    )
+
+
+# ================================
+# 生成本地源端标签
+# ================================
+def _local_source_label(source_selection_mode, source_path, source_paths):
+    if source_selection_mode == SOURCE_MODE_LIST:
+        items = parse_source_path_list(source_paths)
+        if not items:
+            return "source_list_empty"
+        return f"source_list_{len(items)}"
+    return source_path
+
+
+def _s3_source_label(source_selection_mode, source_bucket, source_prefix, source_paths):
+    if source_selection_mode == SOURCE_MODE_LIST:
+        items = parse_source_path_list(source_paths)
+        return f"{source_bucket}/source_list_{len(items)}" if items else f"{source_bucket}/source_list_empty"
+    return _source_label(MODE_S3, "", source_bucket, source_prefix)
 
 
 # ================================
@@ -1815,6 +2445,57 @@ def build_local_source_plan(source_path):
 
 
 # ================================
+# 构建本地源列表扫描计划
+# ================================
+def build_local_source_list_plan(source_paths):
+    entries = []
+    for path_value in parse_source_path_list(source_paths):
+        entry_type = "dir" if os.path.isdir(path_value) else "file"
+        entries.append(
+            {
+                "type": entry_type,
+                "path": path_value,
+                "base_dir": os.path.dirname(path_value) or ".",
+            }
+        )
+
+    return {
+        "pattern": "<source_list>",
+        "has_glob": False,
+        "base_dir": "",
+        "match_count": len(entries),
+        "entries": entries,
+    }
+
+
+def build_local_source_plan_from_config(cfg):
+    source_selection_mode = get_source_selection_mode(cfg)
+    if source_selection_mode == SOURCE_MODE_LIST:
+        return build_local_source_list_plan(cfg.get(SOURCE_SECTION, "paths", fallback=""))
+    return build_local_source_plan(cfg.get(SOURCE_SECTION, "path", fallback="").strip())
+
+
+def build_s3_source_entries_from_config(cfg):
+    source_selection_mode = get_source_selection_mode(cfg)
+    source_bucket = cfg.get(SOURCE_SECTION, "bucket", fallback="").strip()
+    if source_selection_mode != SOURCE_MODE_LIST:
+        return [
+            {
+                "bucket": source_bucket,
+                "prefix": sanitize_key(cfg.get(SOURCE_SECTION, "prefix", fallback="")).strip("/"),
+            }
+        ]
+
+    return [
+        {
+            "bucket": source_bucket,
+            "prefix": sanitize_key(item).strip("/"),
+        }
+        for item in parse_source_path_list(cfg.get(SOURCE_SECTION, "paths", fallback=""))
+    ]
+
+
+# ================================
 # 清洗名称用于文件命名
 # ================================
 def _sanitize_name(name):
@@ -1923,6 +2604,9 @@ def show_config(cfg):
 
         for key, value in _visible_items_for_section(cfg, section):
             shown_value = mask_secret(value) if _is_sensitive(section, key) else value
+            if section == SOURCE_SECTION and key == "paths":
+                paths = parse_source_path_list(value)
+                shown_value = f"{len(paths)} 项" if paths else "(空)"
             if key in {"rate_limit", "rate_limit_burst"} and shown_value not in {"", None}:
                 shown_value = f"{shown_value} req/s"
 
@@ -1971,6 +2655,13 @@ def modify_config(cfg, initial_choice=None, mapping=None):
         if key == "type" and section in {SOURCE_SECTION, TARGET_SECTION}:
             section_label = "source" if section == SOURCE_SECTION else "target"
             new_value = _prompt_mode(section_label, cfg.get(section, key, fallback=MODE_LOCAL), allow_empty=True)
+        elif key == "selection_mode" and section == SOURCE_SECTION:
+            new_value = _prompt_source_selection_mode(cfg.get(section, key, fallback=SOURCE_MODE_DIRECTORY), allow_empty=True)
+        elif key == "paths" and section == SOURCE_SECTION:
+            prompt_source_path_list_action(cfg)
+            mapping = show_config(cfg)
+            choice = None
+            continue
         else:
             new_value = _read_input("新值: ").strip()
 
@@ -2040,6 +2731,24 @@ def load_config():
             cfg.set(section, "type", normalized)
             updated = True
 
+    if cfg.has_option(SOURCE_SECTION, "local_mode"):
+        legacy_selection_mode = cfg.get(SOURCE_SECTION, "local_mode", fallback="")
+        if not cfg.has_option(SOURCE_SECTION, "selection_mode"):
+            cfg.set(SOURCE_SECTION, "selection_mode", legacy_selection_mode)
+        cfg.remove_option(SOURCE_SECTION, "local_mode")
+        updated = True
+
+    raw_source_selection_mode = cfg.get(SOURCE_SECTION, "selection_mode", fallback=SOURCE_MODE_DIRECTORY)
+    normalized_source_selection_mode = _normalize_source_selection_mode(
+        raw_source_selection_mode,
+        default=SOURCE_MODE_DIRECTORY,
+    )
+    if normalized_source_selection_mode is None:
+        normalized_source_selection_mode = SOURCE_MODE_DIRECTORY
+    if raw_source_selection_mode != normalized_source_selection_mode:
+        cfg.set(SOURCE_SECTION, "selection_mode", normalized_source_selection_mode)
+        updated = True
+
     if updated:
         write_config_with_comments(cfg)
         print(f"\n检测到新配置项，已自动更新 {resolve_config_file()}\n")
@@ -2065,7 +2774,16 @@ def write_config_with_comments(cfg):
                 desc = CONFIG_DESC.get(f"{section}.{key}", "")
                 if desc:
                     f.write(f"# {desc}\n")
-                f.write(f"{key} = {value}\n\n")
+                value_text = str(value)
+                if "\n" in value_text:
+                    lines = value_text.splitlines()
+                    first_line = lines[0] if lines else ""
+                    f.write(f"{key} = {first_line}\n")
+                    for line in lines[1:]:
+                        f.write(f"    {line}\n")
+                    f.write("\n")
+                else:
+                    f.write(f"{key} = {value_text}\n\n")
 
             f.write("\n")
 
@@ -2078,6 +2796,8 @@ def validate_config(cfg):
     target_type = _normalize_mode(cfg.get(TARGET_SECTION, "type", fallback=MODE_S3), default=MODE_S3)
 
     source_path = cfg.get(SOURCE_SECTION, "path", fallback="").strip()
+    source_selection_mode = get_source_selection_mode(cfg)
+    source_paths = cfg.get(SOURCE_SECTION, "paths", fallback="")
     source_endpoint = cfg.get(SOURCE_SECTION, "endpoint", fallback="").strip()
     source_bucket = cfg.get(SOURCE_SECTION, "bucket", fallback="").strip()
     source_ak = cfg.get(SOURCE_SECTION, "ak", fallback="").strip()
@@ -2098,19 +2818,36 @@ def validate_config(cfg):
         sys.exit(1)
 
     if source_type == MODE_LOCAL:
-        if not source_path:
-            print("❌ SOURCE.path 未配置")
+        if source_selection_mode not in {SOURCE_MODE_DIRECTORY, SOURCE_MODE_LIST}:
+            print("❌ SOURCE.selection_mode 仅支持 directory 或 list")
             sys.exit(1)
 
-        if _has_local_glob(source_path):
-            source_plan = build_local_source_plan(source_path)
-            if not source_plan["entries"]:
-                print("❌ SOURCE.path 通配符未匹配到任何本地文件或目录")
+        if source_selection_mode == SOURCE_MODE_LIST:
+            paths = parse_source_path_list(source_paths)
+            if not paths:
+                print("❌ SOURCE.paths 未配置，列表模式至少需要一个文件或目录")
                 sys.exit(1)
-        elif not os.path.exists(source_path):
-            print("❌ SOURCE.path 不存在")
-            sys.exit(1)
+            for path_value in paths:
+                if not os.path.exists(path_value):
+                    print(f"❌ SOURCE.paths 中的路径不存在：{path_value}")
+                    sys.exit(1)
+        else:
+            if not source_path:
+                print("❌ SOURCE.path 未配置")
+                sys.exit(1)
+
+            if _has_local_glob(source_path):
+                source_plan = build_local_source_plan(source_path)
+                if not source_plan["entries"]:
+                    print("❌ SOURCE.path 通配符未匹配到任何本地文件或目录")
+                    sys.exit(1)
+            elif not os.path.exists(source_path):
+                print("❌ SOURCE.path 不存在")
+                sys.exit(1)
     else:
+        if source_selection_mode not in {SOURCE_MODE_DIRECTORY, SOURCE_MODE_LIST}:
+            print("❌ SOURCE.selection_mode 仅支持 directory 或 list")
+            sys.exit(1)
         if not source_ak or not source_sk:
             print("❌ SOURCE.ak / SOURCE.sk 未配置")
             sys.exit(1)
@@ -2119,6 +2856,9 @@ def validate_config(cfg):
             sys.exit(1)
         if not source_bucket:
             print("❌ SOURCE.bucket 未配置")
+            sys.exit(1)
+        if source_selection_mode == SOURCE_MODE_LIST and not parse_source_path_list(source_paths):
+            print("❌ SOURCE.paths 未配置，S3 列表模式至少需要一个前缀或对象")
             sys.exit(1)
 
     if target_type == MODE_LOCAL:
@@ -2212,6 +2952,8 @@ def _legacy_main():
     target_type = _normalize_mode(cfg.get(TARGET_SECTION, "type", fallback=MODE_S3), default=MODE_S3)
 
     source_path = cfg.get(SOURCE_SECTION, "path", fallback="").strip()
+    source_selection_mode = get_source_selection_mode(cfg)
+    source_paths = cfg.get(SOURCE_SECTION, "paths", fallback="")
     source_ak = _decrypt_from_config(cfg, SOURCE_SECTION, "ak")
     source_sk = _decrypt_from_config(cfg, SOURCE_SECTION, "sk")
     source_endpoint = cfg.get(SOURCE_SECTION, "endpoint", fallback="").strip()
@@ -2225,8 +2967,13 @@ def _legacy_main():
     target_bucket = cfg.get(TARGET_SECTION, "bucket", fallback="").strip()
     target_prefix = sanitize_key(cfg.get(TARGET_SECTION, "prefix", fallback="")).strip("/")
 
-    source_label = _source_label(source_type, source_path, source_bucket, source_prefix)
-    local_source_plan = build_local_source_plan(source_path) if source_type == MODE_LOCAL else None
+    source_label = (
+        _local_source_label(source_selection_mode, source_path, source_paths)
+        if source_type == MODE_LOCAL
+        else _s3_source_label(source_selection_mode, source_bucket, source_prefix, source_paths)
+    )
+    local_source_plan = build_local_source_plan_from_config(cfg) if source_type == MODE_LOCAL else None
+    s3_source_entries = build_s3_source_entries_from_config(cfg) if source_type == MODE_S3 else None
 
     workers = cfg.getint("UPLOAD", "workers")
     retry_limit = cfg.getint("UPLOAD", "retry")
@@ -2459,10 +3206,10 @@ def _legacy_main():
         def run_s3_scan():
             set_status("scan", "running")
             try:
-                scan_s3_objects(
+                scan_s3_sources(
+                    s3_source_entries,
                     uploader_module._source_client,
                     source_bucket,
-                    source_prefix,
                     task_queue,
                     progress,
                     reporter,
@@ -2533,6 +3280,8 @@ def main():
     target_type = _normalize_mode(cfg.get(TARGET_SECTION, "type", fallback=MODE_S3), default=MODE_S3)
 
     source_path = cfg.get(SOURCE_SECTION, "path", fallback="").strip()
+    source_selection_mode = get_source_selection_mode(cfg)
+    source_paths = cfg.get(SOURCE_SECTION, "paths", fallback="")
     source_ak = _decrypt_from_config(cfg, SOURCE_SECTION, "ak")
     source_sk = _decrypt_from_config(cfg, SOURCE_SECTION, "sk")
     source_endpoint = cfg.get(SOURCE_SECTION, "endpoint", fallback="").strip()
@@ -2546,8 +3295,13 @@ def main():
     target_bucket = cfg.get(TARGET_SECTION, "bucket", fallback="").strip()
     target_prefix = sanitize_key(cfg.get(TARGET_SECTION, "prefix", fallback="")).strip("/")
 
-    source_label = _source_label(source_type, source_path, source_bucket, source_prefix)
-    local_source_plan = build_local_source_plan(source_path) if source_type == MODE_LOCAL else None
+    source_label = (
+        _local_source_label(source_selection_mode, source_path, source_paths)
+        if source_type == MODE_LOCAL
+        else _s3_source_label(source_selection_mode, source_bucket, source_prefix, source_paths)
+    )
+    local_source_plan = build_local_source_plan_from_config(cfg) if source_type == MODE_LOCAL else None
+    s3_source_entries = build_s3_source_entries_from_config(cfg) if source_type == MODE_S3 else None
 
     workers = cfg.getint("UPLOAD", "workers")
     checker_workers = cfg.getint("UPLOAD", "checkers", fallback=max(1, workers // 2))
@@ -2835,10 +3589,10 @@ def main():
         def run_s3_scan():
             set_status("scan", "running")
             try:
-                scan_s3_objects(
+                scan_s3_sources(
+                    s3_source_entries,
                     uploader_module._source_client,
                     source_bucket,
-                    source_prefix,
                     check_queue,
                     progress,
                     reporter,
