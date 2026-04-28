@@ -2207,7 +2207,7 @@ def show_config_group(cfg, group_id):
             paths = _source_path_list(cfg)
             shown_value = f"{len(paths)} 项" if paths else "(空)"
         if section == "PATH" and key == "migration_list_file":
-            shown_value = _shorten_text(_source_paths_file(cfg) or value or "(未配置)", 66)
+            shown_value = _shorten_text(value or DEFAULT_CONFIG["PATH"]["migration_list_file"], 66)
         if key in {"rate_limit", "rate_limit_burst"} and shown_value not in {"", None}:
             shown_value = f"{shown_value} req/s"
 
@@ -2724,7 +2724,7 @@ def show_config(cfg):
                 paths = _source_path_list(cfg)
                 shown_value = f"{len(paths)} 项" if paths else "(空)"
             if section == "PATH" and key == "migration_list_file":
-                shown_value = _shorten_text(_source_paths_file(cfg) or value or "(未配置)", 66)
+                shown_value = _shorten_text(value or DEFAULT_CONFIG["PATH"]["migration_list_file"], 66)
             if key in {"rate_limit", "rate_limit_burst"} and shown_value not in {"", None}:
                 shown_value = f"{shown_value} req/s"
 
