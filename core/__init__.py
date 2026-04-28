@@ -9,6 +9,7 @@ from .governor import ResourceGovernor
 from .object_browser import (
     BrowserItem,
     BrowserPage,
+    count_remote_prefix_items,
     create_obs_client,
     list_local_path,
     list_remote_buckets,
@@ -61,6 +62,7 @@ __all__ = [
     "detect_backend_capabilities",
     "BrowserItem",
     "BrowserPage",
+    "count_remote_prefix_items",
     "create_obs_client",
     "list_local_path",
     "list_remote_buckets",

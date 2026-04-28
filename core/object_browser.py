@@ -275,6 +275,39 @@ def list_remote_prefix(
 
 
 # ================================
+# 统计远端目录的直接子项数量
+# ================================
+def count_remote_prefix_items(
+    client,
+    bucket,
+    prefix="",
+    low_level_retries=3,
+    low_level_retry_sleep=0.5,
+):
+    marker = None
+    total = 0
+
+    while True:
+        page = list_remote_prefix(
+            client,
+            bucket,
+            prefix,
+            marker=marker,
+            page_size=1000,
+            low_level_retries=low_level_retries,
+            low_level_retry_sleep=low_level_retry_sleep,
+        )
+        total += len(page.items or [])
+
+        if not page.has_next or not page.next_marker:
+            break
+
+        marker = page.next_marker
+
+    return total
+
+
+# ================================
 # 分页列举本地目录与文件
 # ================================
 def list_local_path(path, page=1, page_size=50):

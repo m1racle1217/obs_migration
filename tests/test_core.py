@@ -21,7 +21,13 @@ from rich.panel import Panel
 from core.checkpoint import Checkpoint
 from core.dashboard import Dashboard
 from core.obs_index import build_obs_index
-from core.object_browser import list_local_path, list_remote_buckets, list_remote_prefix, parent_prefix
+from core.object_browser import (
+    count_remote_prefix_items,
+    list_local_path,
+    list_remote_buckets,
+    list_remote_prefix,
+    parent_prefix,
+)
 from core.progress import Progress
 from core.report import Reporter
 from core.scan_control import AdaptiveScanController
@@ -241,6 +247,32 @@ class ObjectBrowserTests(unittest.TestCase):
         self.assertEqual(page.items[1].size, 1234)
         self.assertEqual(page.items[1].etag, "etag-a")
         self.assertEqual(page.items[1].storage_class, "STANDARD")
+
+    def test_count_remote_prefix_items_counts_all_pages(self):
+        class FakeClient:
+            def listObjects(self, bucket, delimiter="/", prefix="", marker=None, max_keys=1000):
+                if marker is None:
+                    return SimpleNamespace(
+                        status=200,
+                        body=SimpleNamespace(
+                            commonPrefixes=[SimpleNamespace(prefix="root/dir/")],
+                            contents=[SimpleNamespace(key="root/a.txt", size=1)],
+                            is_truncated=True,
+                            next_marker="page-2",
+                        ),
+                    )
+
+                return SimpleNamespace(
+                    status=200,
+                    body=SimpleNamespace(
+                        commonPrefixes=[],
+                        contents=[SimpleNamespace(key="root/b.txt", size=2)],
+                        is_truncated=False,
+                        next_marker=None,
+                    ),
+                )
+
+        self.assertEqual(count_remote_prefix_items(FakeClient(), "bucket", "root"), 3)
 
     def test_parent_prefix_and_local_path_pagination(self):
         self.assertEqual(parent_prefix("a/b/c"), "a/b")
