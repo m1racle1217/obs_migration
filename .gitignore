@@ -27,3 +27,4 @@ test_write_dir/
 vendor/
 dist/
 build/
+.build_tools/

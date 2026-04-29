@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """浏览本地文件系统与 OBS / S3 兼容对象存储中的桶、目录和文件。"""
 
+from __future__ import annotations
+
 import os
 from dataclasses import dataclass
 from typing import Optional

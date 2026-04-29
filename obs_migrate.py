@@ -15,6 +15,12 @@ import time
 import unicodedata
 from datetime import datetime
 
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
+
 from bootstrap_runtime import bootstrap_local_deps
 
 bootstrap_local_deps()
