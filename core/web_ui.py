@@ -314,9 +314,29 @@ INDEX_HTML = """<!doctype html>
 
     function renderConfigEditor(config) {
       configForm.innerHTML = "";
-      Object.entries(config || {}).forEach(([section, values]) => {
+      const sections = Object.entries(config || {});
+      const tabList = document.createElement("div");
+      tabList.className = "config-tabs";
+      tabList.setAttribute("role", "tablist");
+      configForm.appendChild(tabList);
+      sections.forEach(([section, values], index) => {
+        const tab = document.createElement("button");
+        tab.type = "button";
+        tab.className = "config-tab" + (index === 0 ? " active" : "");
+        tab.dataset.section = section;
+        tab.setAttribute("role", "tab");
+        tab.setAttribute("aria-selected", index === 0 ? "true" : "false");
+        tab.setAttribute("aria-controls", "config-panel-" + section);
+        tab.textContent = section;
+        tab.addEventListener("click", () => selectConfigTab(section));
+        tabList.appendChild(tab);
+
         const fieldset = document.createElement("fieldset");
+        fieldset.id = "config-panel-" + section;
+        fieldset.className = "config-panel";
         fieldset.dataset.section = section;
+        fieldset.setAttribute("role", "tabpanel");
+        if (index !== 0) fieldset.hidden = true;
         const legend = document.createElement("legend");
         legend.textContent = section;
         fieldset.appendChild(legend);
@@ -614,9 +634,39 @@ INDEX_HTML = r"""<!doctype html>
     .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
     .metric-card { padding: 16px; }
     .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-    .config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+    .config-grid { display: block; }
+    .config-tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+      padding: 8px;
+      border: 1px solid rgba(96,165,250,.18);
+      border-radius: 16px;
+      background: rgba(3,9,22,.42);
+    }
+    .config-tab {
+      min-height: 38px;
+      border-radius: 11px;
+      padding: 0 14px;
+      color: var(--soft);
+      background: rgba(96,165,250,.07);
+      border-color: rgba(96,165,250,.16);
+    }
+    .config-tab.active {
+      color: #06111f;
+      background: linear-gradient(135deg, #eff6ff, #93c5fd 60%, #60a5fa);
+      box-shadow: 0 10px 26px rgba(96,165,250,.2);
+    }
+    .config-panel {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+    }
+    .config-panel[hidden] { display: none; }
     fieldset { border: 1px solid var(--line); border-radius: 16px; padding: 14px; }
     legend { color: var(--primary-strong); font-weight: 800; }
+    .config-panel legend { grid-column: 1 / -1; }
     pre, .code {
       overflow: auto;
       min-height: 100px;
@@ -1162,9 +1212,29 @@ INDEX_HTML = r"""<!doctype html>
     }
     function renderConfigEditor(config) {
       configForm.innerHTML = "";
-      Object.entries(config || {}).forEach(([section, values]) => {
+      const sections = Object.entries(config || {});
+      const tabList = document.createElement("div");
+      tabList.className = "config-tabs";
+      tabList.setAttribute("role", "tablist");
+      configForm.appendChild(tabList);
+      sections.forEach(([section, values], index) => {
+        const tab = document.createElement("button");
+        tab.type = "button";
+        tab.className = "config-tab" + (index === 0 ? " active" : "");
+        tab.dataset.section = section;
+        tab.setAttribute("role", "tab");
+        tab.setAttribute("aria-selected", index === 0 ? "true" : "false");
+        tab.setAttribute("aria-controls", "config-panel-" + section);
+        tab.textContent = section;
+        tab.addEventListener("click", () => selectConfigTab(section));
+        tabList.appendChild(tab);
+
         const fieldset = document.createElement("fieldset");
+        fieldset.id = "config-panel-" + section;
+        fieldset.className = "config-panel";
         fieldset.dataset.section = section;
+        fieldset.setAttribute("role", "tabpanel");
+        if (index !== 0) fieldset.hidden = true;
         const legend = document.createElement("legend");
         legend.textContent = section;
         fieldset.appendChild(legend);
@@ -1181,6 +1251,17 @@ INDEX_HTML = r"""<!doctype html>
         });
         configForm.appendChild(fieldset);
       });
+    }
+    function selectConfigTab(section) {
+      configForm.querySelectorAll(".config-tab").forEach(tab => {
+        const active = tab.dataset.section === section;
+        tab.classList.toggle("active", active);
+        tab.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      configForm.querySelectorAll(".config-panel").forEach(panel => {
+        panel.hidden = panel.dataset.section !== section;
+      });
+      setStatus(section + " 配置已打开");
     }
     function collectConfigPayload() {
       const payload = {};

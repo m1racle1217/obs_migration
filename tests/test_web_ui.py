@@ -626,6 +626,10 @@ class WebConsoleServerTests(unittest.TestCase):
         for marker in (
             'id="config-form"',
             'id="save-config"',
+            'className = "config-tabs"',
+            'className = "config-tab"',
+            'function selectConfigTab',
+            'role", "tablist"',
             'id="login-view"',
             'id="app-shell"',
             'id="logout-button"',
