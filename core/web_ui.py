@@ -768,7 +768,7 @@ INDEX_HTML = r"""<!doctype html>
         <h2>登录</h2>
         <p id="auth-message" class="muted"></p>
         <label>用户名 <input id="login-username" autocomplete="username" value="admin"></label>
-        <label>密码 <input id="login-password" type="password" autocomplete="current-password"></label>
+        <label>密码 <input id="login-password" type="password" autocomplete="current-password" placeholder="默认：admin"></label>
         <button id="login-button" class="primary" type="button">登录</button>
       </div>
     </div>
@@ -994,7 +994,7 @@ INDEX_HTML = r"""<!doctype html>
         showApp();
         await bootApp();
       } catch (error) {
-        authMessage.textContent = "登录失败：" + error.message;
+        authMessage.textContent = "登录失败：用户名或密码错误。默认是 admin / admin；如果已修改，请查看 config.ini 的 [WEB_UI]。";
       }
     }
     async function logout() {

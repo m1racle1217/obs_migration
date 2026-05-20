@@ -596,6 +596,8 @@ class WebConsoleServerTests(unittest.TestCase):
             "任务仪表盘",
             "日志 / 报告",
             "<h2>登录</h2>",
+            "默认：admin",
+            "默认是 admin / admin",
             "新增任务",
             "退出登录",
             "启动任务",
