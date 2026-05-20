@@ -592,4 +592,4 @@ python obs_migrate.py --web
 - `host` / `port`：监听地址和端口；端口被占用时启动错误会包含当前 host/port。
 - `require_login` / `username` / `password`：控制 API 登录；非本机监听建议保持登录开启。
 - `auto_open`：设为 `true` 时启动后自动打开浏览器。
-- Web 控制台启动后仍会在前台执行原 CLI 迁移流程；结束或中断时会关闭 Web 服务。
+- Web 控制台启动后不会自动开始迁移任务；请在“任务仪表盘”中点击“启动任务”，或调用 `POST /api/task/start`。

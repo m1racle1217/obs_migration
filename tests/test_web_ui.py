@@ -629,8 +629,6 @@ class CliStartupTests(unittest.TestCase):
         cfg.set("WEB_UI", "enabled", "false")
         cfg.set("UI", "prompt_config", "true")
         task_manager = mock.Mock()
-        task_manager.start.return_value = True
-        task_manager.join.return_value = True
         server = mock.Mock(url="http://127.0.0.1:8765/")
 
         with mock.patch.object(obs_migrate, "ensure_dirs"):
@@ -640,11 +638,13 @@ class CliStartupTests(unittest.TestCase):
                         with mock.patch.object(obs_migrate, "_ensure_secret_fields_encrypted"):
                             with mock.patch.object(obs_migrate, "TaskManager", return_value=task_manager):
                                 with mock.patch.object(obs_migrate, "WebConsoleServer", return_value=server):
-                                    with redirect_stdout(io.StringIO()):
-                                        obs_migrate.main(["--web"])
+                                    with mock.patch.object(obs_migrate, "_wait_for_web_console") as wait_for_web:
+                                        with redirect_stdout(io.StringIO()):
+                                            obs_migrate.main(["--web"])
 
         load_config.assert_called_once_with(prompt=False)
-        task_manager.start.assert_called_once_with(cfg)
+        task_manager.start.assert_not_called()
+        wait_for_web.assert_called_once_with(server)
         server.stop.assert_called_once_with()
 
     def test_main_web_enabled_config_load_skips_interactive_prompt(self):
@@ -652,8 +652,6 @@ class CliStartupTests(unittest.TestCase):
         cfg.set("WEB_UI", "enabled", "true")
         cfg.set("UI", "prompt_config", "true")
         task_manager = mock.Mock()
-        task_manager.start.return_value = True
-        task_manager.join.return_value = True
         server = mock.Mock(url="http://127.0.0.1:8765/")
 
         with mock.patch.object(obs_migrate, "ensure_dirs"):
@@ -663,19 +661,19 @@ class CliStartupTests(unittest.TestCase):
                         with mock.patch.object(obs_migrate, "_ensure_secret_fields_encrypted"):
                             with mock.patch.object(obs_migrate, "TaskManager", return_value=task_manager):
                                 with mock.patch.object(obs_migrate, "WebConsoleServer", return_value=server):
-                                    with redirect_stdout(io.StringIO()):
-                                        obs_migrate.main([])
+                                    with mock.patch.object(obs_migrate, "_wait_for_web_console") as wait_for_web:
+                                        with redirect_stdout(io.StringIO()):
+                                            obs_migrate.main([])
 
         load_config.assert_called_once_with(prompt=False)
-        task_manager.start.assert_called_once_with(cfg)
+        task_manager.start.assert_not_called()
+        wait_for_web.assert_called_once_with(server)
         server.stop.assert_called_once_with()
 
-    def test_main_web_enabled_starts_and_waits_on_shared_task_manager(self):
+    def test_main_web_enabled_starts_console_without_auto_starting_task(self):
         cfg = make_config(require_login=False)
         cfg.set("WEB_UI", "enabled", "true")
         task_manager = mock.Mock()
-        task_manager.start.return_value = True
-        task_manager.join.return_value = True
         server = mock.Mock(url="http://127.0.0.1:8765/")
 
         with mock.patch.object(obs_migrate, "ensure_dirs"):
@@ -685,24 +683,23 @@ class CliStartupTests(unittest.TestCase):
                         with mock.patch.object(obs_migrate, "TaskManager", return_value=task_manager) as task_manager_cls:
                             with mock.patch.object(obs_migrate, "WebConsoleServer", return_value=server) as web_server_cls:
                                 with mock.patch.object(obs_migrate, "run_migration") as run_migration:
-                                    with redirect_stdout(io.StringIO()):
-                                        obs_migrate.main([])
+                                    with mock.patch.object(obs_migrate, "_wait_for_web_console") as wait_for_web:
+                                        with redirect_stdout(io.StringIO()):
+                                            obs_migrate.main([])
 
         task_manager_cls.assert_called_once_with(run_migration)
         web_server_cls.assert_called_once()
         self.assertIs(web_server_cls.call_args.args[1], task_manager)
-        task_manager.start.assert_called_once_with(cfg)
-        task_manager.join.assert_called()
+        task_manager.start.assert_not_called()
+        wait_for_web.assert_called_once_with(server)
         run_migration.assert_not_called()
         task_manager.stop.assert_called_once_with()
         server.stop.assert_called_once_with()
 
-    def test_main_web_enabled_does_not_start_second_run_when_task_already_active(self):
+    def test_main_web_enabled_wait_keyboard_interrupt_still_shuts_down(self):
         cfg = make_config(require_login=False)
         cfg.set("WEB_UI", "enabled", "true")
         task_manager = mock.Mock()
-        task_manager.start.return_value = False
-        task_manager.join.return_value = False
         server = mock.Mock(url="http://127.0.0.1:8765/")
 
         with mock.patch.object(obs_migrate, "ensure_dirs"):
@@ -712,21 +709,19 @@ class CliStartupTests(unittest.TestCase):
                         with mock.patch.object(obs_migrate, "TaskManager", return_value=task_manager):
                             with mock.patch.object(obs_migrate, "WebConsoleServer", return_value=server):
                                 with mock.patch.object(obs_migrate, "run_migration") as run_migration:
-                                    with redirect_stdout(io.StringIO()):
-                                        obs_migrate.main([])
+                                    with mock.patch.object(obs_migrate, "_wait_for_web_console", side_effect=KeyboardInterrupt):
+                                        with redirect_stdout(io.StringIO()):
+                                            obs_migrate.main([])
 
-        task_manager.start.assert_called_once_with(cfg)
-        task_manager.join.assert_called()
+        task_manager.start.assert_not_called()
         run_migration.assert_not_called()
         task_manager.stop.assert_called_once_with()
         server.stop.assert_called_once_with()
 
-    def test_main_web_enabled_shutdown_stops_task_and_server_after_join_error(self):
+    def test_main_web_enabled_shutdown_stops_task_and_server_after_wait_error(self):
         cfg = make_config(require_login=False)
         cfg.set("WEB_UI", "enabled", "true")
         task_manager = mock.Mock()
-        task_manager.start.return_value = True
-        task_manager.join.side_effect = RuntimeError("join failed")
         server = mock.Mock(url="http://127.0.0.1:8765/")
 
         with mock.patch.object(obs_migrate, "ensure_dirs"):
@@ -735,10 +730,12 @@ class CliStartupTests(unittest.TestCase):
                     with mock.patch.object(obs_migrate, "_ensure_secret_fields_encrypted"):
                         with mock.patch.object(obs_migrate, "TaskManager", return_value=task_manager):
                             with mock.patch.object(obs_migrate, "WebConsoleServer", return_value=server):
-                                with self.assertRaisesRegex(RuntimeError, "join failed"):
-                                    with redirect_stdout(io.StringIO()):
-                                        obs_migrate.main([])
+                                with mock.patch.object(obs_migrate, "_wait_for_web_console", side_effect=RuntimeError("wait failed")):
+                                    with self.assertRaisesRegex(RuntimeError, "wait failed"):
+                                        with redirect_stdout(io.StringIO()):
+                                            obs_migrate.main([])
 
+        task_manager.start.assert_not_called()
         task_manager.stop.assert_called_once_with()
         server.stop.assert_called_once_with()
 

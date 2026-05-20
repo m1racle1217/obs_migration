@@ -3665,6 +3665,18 @@ def _shutdown_web_runtime(server, task_manager, join_timeout=5):
             print(f"⚠️ Web 任务等待结束失败: {exc}")
 
 
+def _wait_for_web_console(server):
+    print("Web 控制台已启动，按 Ctrl+C 退出。")
+    try:
+        while True:
+            thread = getattr(server, "_thread", None)
+            if thread is not None and not thread.is_alive():
+                return
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("\n收到退出请求，正在关闭 Web 控制台...")
+
+
 def main(argv=None):
     ensure_dirs()
 
@@ -3683,10 +3695,10 @@ def main(argv=None):
     task_manager = _new_task_manager()
     server = _start_web_console(cfg, task_manager)
     try:
-        started = task_manager.start(cfg)
-        if not started:
-            print("Web 任务已在运行，等待当前任务结束")
-        task_manager.join()
+        try:
+            _wait_for_web_console(server)
+        except KeyboardInterrupt:
+            print("\n收到退出请求，正在关闭 Web 控制台...")
         return None
     finally:
         _shutdown_web_runtime(server, task_manager)
