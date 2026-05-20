@@ -3305,6 +3305,18 @@ def run_migration(cfg, controls=None):
     )
 
     reporter = Reporter(report_dir, source_label)
+    if controls is not None:
+        controls.update_status(
+            logs={
+                "log_file": log_file,
+                "log_dir": log_dir,
+                "state_dir": state_dir,
+                "report_dir": report_dir,
+                "report_file": reporter.file,
+                "summary_file": getattr(reporter, "summary_file", ""),
+                "failed_dir": failed_dir,
+            }
+        )
     uploader = OBSUploader(
         progress,
         checkpoint,

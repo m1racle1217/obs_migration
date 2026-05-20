@@ -678,6 +678,23 @@ INDEX_HTML = r"""<!doctype html>
       font-family: ui-monospace, Consolas, monospace;
       white-space: pre-wrap;
     }
+    .log-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .log-meta {
+      display: grid;
+      gap: 6px;
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 12px;
+      word-break: break-all;
+    }
+    #task-log-output { min-height: 460px; }
     .browser-window {
       min-height: calc(100dvh - 190px);
       display: grid;
@@ -1024,7 +1041,15 @@ INDEX_HTML = r"""<!doctype html>
 
       <section id="logs" class="panel" data-page="logs">
         <h2>日志 / 报告</h2>
-        <p class="muted">迁移任务结束后，请在 logs、state 和 check_report 目录查看详细日志与报告。</p>
+        <div class="log-toolbar">
+          <p class="muted">实时任务日志会跟随当前选中的任务刷新；任务结束后仍可在 logs、state 和 check_report 目录查看完整文件。</p>
+          <button id="refresh-logs" type="button">刷新日志</button>
+        </div>
+        <div id="task-log-meta" class="log-meta">
+          <span>任务日志文件：等待任务启动...</span>
+          <span>报告文件：等待任务生成...</span>
+        </div>
+        <pre id="task-log-output">请选择一个任务，或启动任务后查看实时日志。</pre>
       </section>
     </main>
     <div class="status-bar"><span id="status-text">Operations Shell 就绪</span><span>API /api/tasks · /api/task/status · /api/task/start · /api/task/pause · /api/task/resume · /api/task/stop</span></div>
@@ -1048,6 +1073,8 @@ INDEX_HTML = r"""<!doctype html>
     const configForm = document.getElementById("config-form");
     const configOutput = document.getElementById("config-output");
     const browserOutput = document.getElementById("browser-output");
+    const taskLogOutput = document.getElementById("task-log-output");
+    const taskLogMeta = document.getElementById("task-log-meta");
     const browserBody = document.getElementById("browser-body");
     const browserStatus = document.getElementById("browser-status");
     const browserSelected = document.getElementById("browser-selected");
@@ -1092,6 +1119,9 @@ INDEX_HTML = r"""<!doctype html>
       });
       if (page !== "dashboard") document.getElementById("task-editor").classList.add("hidden");
       setStatus((PAGE_TITLES[page] || "页面") + " 已打开");
+      if (page === "logs") loadTaskLog().catch(error => {
+        if (taskLogOutput) taskLogOutput.textContent = error.message;
+      });
     }
     async function api(path, options) {
       const response = await fetch(path, Object.assign({ credentials: "same-origin" }, options || {}));
@@ -1210,6 +1240,7 @@ INDEX_HTML = r"""<!doctype html>
     async function loadTask(taskId) {
       const data = await api("/api/tasks/" + taskId);
       renderTask(data.task);
+      if (currentPage() === "logs") loadTaskLog(taskId).catch(error => taskLogOutput.textContent = error.message);
     }
     function renderTask(task) {
       const d = task.dashboard || {};
@@ -1243,6 +1274,21 @@ INDEX_HTML = r"""<!doctype html>
       taskOutput.textContent = JSON.stringify(task, null, 2);
       renderConcurrency(task.concurrency || {});
       setStatus("任务状态已更新");
+    }
+    async function loadTaskLog(taskId = selectedTaskId) {
+      if (!taskLogOutput || !taskLogMeta) return;
+      if (!taskId) {
+        taskLogMeta.innerHTML = "<span>任务日志文件：未选择任务</span><span>报告文件：未选择任务</span>";
+        taskLogOutput.textContent = "请先在任务仪表盘选择一个任务。";
+        return;
+      }
+      const data = await api(`/api/tasks/${taskId}/logs?max_bytes=65536`);
+      const log = data.log || {};
+      taskLogMeta.innerHTML = [
+        "任务日志文件：" + (log.path || "任务尚未启动，暂无日志文件"),
+        "报告文件：" + (log.report_file || "任务尚未生成报告")
+      ].map(item => `<span>${escapeHtml(item)}</span>`).join("");
+      taskLogOutput.textContent = log.content || "任务日志为空或尚未写入。";
     }
     function renderConcurrency(concurrency) {
       document.getElementById("concurrency-upload").value = concurrency.upload_workers || 32;
@@ -1548,10 +1594,14 @@ INDEX_HTML = r"""<!doctype html>
       await Promise.all([loadTasks(), loadConfig()]);
       browse(false).catch(() => {});
       window.setInterval(() => loadTasks().catch(() => {}), 3000);
+      window.setInterval(() => {
+        if (currentPage() === "logs") loadTaskLog().catch(() => {});
+      }, 3000);
     }
     document.getElementById("login-button").addEventListener("click", login);
     document.getElementById("logout-button").addEventListener("click", logout);
     document.getElementById("refresh-tasks").addEventListener("click", () => loadTasks().catch(error => setStatus(error.message)));
+    document.getElementById("refresh-logs").addEventListener("click", () => loadTaskLog().catch(error => taskLogOutput.textContent = error.message));
     document.getElementById("new-task-button").addEventListener("click", () => {
       const editor = document.getElementById("task-editor");
       const hidden = editor.classList.toggle("hidden");
@@ -1740,6 +1790,8 @@ class WebConsoleServer:
                 self._handle_list_tasks(request)
             elif request.command == "POST" and path == "/api/tasks":
                 self._handle_create_task(request)
+            elif task_route and request.command == "GET" and task_route[1] == "logs":
+                self._handle_task_logs(request, task_route[0], parsed)
             elif task_route and request.command == "GET":
                 self._handle_get_task(request, task_route[0])
             elif task_route and request.command == "PATCH" and task_route[1] == "concurrency":
@@ -1754,6 +1806,8 @@ class WebConsoleServer:
                 self._send_json(request, {"ok": True, "config": self._config_payload()})
             elif request.command == "GET" and path == "/api/task/status":
                 self._send_json(request, {"ok": True, "status": self.task_manager.snapshot()})
+            elif request.command == "GET" and path == "/api/task/logs":
+                self._handle_task_logs(request, None, parsed)
             elif request.command == "POST" and path.startswith("/api/task/"):
                 self._handle_task_action(request, path.rsplit("/", 1)[-1])
             elif request.command == "GET" and path == "/api/browser/local":
@@ -1838,6 +1892,44 @@ class WebConsoleServer:
             self._send_json(request, {"ok": True, "task": self.task_manager.snapshot(task_id)})
         except KeyError:
             self._send_json(request, {"ok": False, "error": "task not found"}, HTTPStatus.NOT_FOUND)
+
+    def _handle_task_logs(self, request, task_id, parsed):
+        query = _query(parsed)
+        max_bytes = min(max(_int_param(query, "max_bytes", 65536), 1024), 1024 * 1024)
+        try:
+            try:
+                snapshot = self.task_manager.snapshot(task_id) if task_id else self.task_manager.snapshot()
+            except TypeError:
+                snapshot = self.task_manager.snapshot()
+        except KeyError:
+            self._send_json(request, {"ok": False, "error": "task not found"}, HTTPStatus.NOT_FOUND)
+            return
+
+        logs = (snapshot or {}).get("logs") or {}
+        log_file = str(logs.get("log_file") or "")
+        content = ""
+        exists = bool(log_file and os.path.isfile(log_file))
+        if exists:
+            content = _read_tail_text(log_file, max_bytes=max_bytes)
+        self._send_json(
+            request,
+            {
+                "ok": True,
+                "log": {
+                    "task_id": (snapshot or {}).get("task_id") or task_id,
+                    "path": log_file,
+                    "exists": exists,
+                    "content": content,
+                    "max_bytes": max_bytes,
+                    "log_dir": logs.get("log_dir", ""),
+                    "state_dir": logs.get("state_dir", ""),
+                    "report_dir": logs.get("report_dir", ""),
+                    "report_file": logs.get("report_file", ""),
+                    "summary_file": logs.get("summary_file", ""),
+                    "failed_dir": logs.get("failed_dir", ""),
+                },
+            },
+        )
 
     def _handle_task_concurrency(self, request, task_id):
         if not hasattr(self.task_manager, "update_concurrency"):
@@ -2074,6 +2166,16 @@ def _int_param(query, key, default):
         return int(value)
     except (TypeError, ValueError):
         raise ValueError(f"{key} must be an integer")
+
+
+def _read_tail_text(file_path, max_bytes=65536):
+    size = os.path.getsize(file_path)
+    with open(file_path, "rb") as handle:
+        if size > max_bytes:
+            handle.seek(size - max_bytes)
+            handle.readline()
+        raw = handle.read(max_bytes)
+    return raw.decode("utf-8", errors="replace")
 
 
 def _file_ends_with_newline(file_path):

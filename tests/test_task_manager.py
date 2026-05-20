@@ -57,6 +57,7 @@ class TaskManagerTests(unittest.TestCase):
                 progress={"files_done": 1},
                 pipeline={"scan": "done"},
                 workers={"upload": {"active_workers": 0}},
+                logs={"log_file": "logs/task.log"},
             )
 
         manager = TaskManager(runner)
@@ -69,6 +70,7 @@ class TaskManagerTests(unittest.TestCase):
         self.assertEqual(snapshot["progress"], {"files_done": 1})
         self.assertEqual(snapshot["pipeline"], {"scan": "done"})
         self.assertEqual(snapshot["workers"], {"upload": {"active_workers": 0}})
+        self.assertEqual(snapshot["logs"], {"log_file": "logs/task.log"})
         self.assertIsNone(snapshot["error"])
         self.assertIsNotNone(snapshot["timestamps"]["started_at"])
         self.assertIsNotNone(snapshot["timestamps"]["finished_at"])

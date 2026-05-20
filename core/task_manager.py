@@ -178,6 +178,7 @@ class TaskManager:
             "workers": controls_snapshot.get("workers", {}),
             "queues": controls_snapshot.get("queues", {}),
             "concurrency": controls_snapshot.get("concurrency", {}),
+            "logs": controls_snapshot.get("logs", {}),
             "error": error,
             "timestamps": timestamps,
         }
@@ -321,6 +322,7 @@ class ManagedMigrationTask:
             "progress": snapshot["progress"],
             "dashboard": snapshot["dashboard"],
             "concurrency": snapshot["concurrency"],
+            "logs": snapshot["logs"],
             "error": snapshot["error"],
             "timestamps": snapshot["timestamps"],
         }
@@ -340,6 +342,7 @@ class ManagedMigrationTask:
         pipeline = controls_snapshot.get("pipeline", {})
         workers = controls_snapshot.get("workers", {})
         queues = controls_snapshot.get("queues", {})
+        logs = controls_snapshot.get("logs", {})
         dashboard = _build_dashboard(progress, pipeline, workers, queues)
         return {
             "task_id": self.task_id,
@@ -353,6 +356,7 @@ class ManagedMigrationTask:
             "queues": queues,
             "dashboard": dashboard,
             "concurrency": concurrency,
+            "logs": logs,
             "error": error,
             "timestamps": timestamps,
         }
@@ -633,6 +637,7 @@ def _empty_task_snapshot():
         "queues": {},
         "dashboard": _build_dashboard({}, {}, {}, {}),
         "concurrency": {},
+        "logs": {},
         "error": None,
         "timestamps": {"created_at": time.time(), "started_at": None, "finished_at": None},
     }

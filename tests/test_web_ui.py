@@ -582,6 +582,35 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertEqual([(item["kind"], item["name"]) for item in data["page"]["items"]], [("dir", "sub"), ("file", "file.txt")])
         self.assertEqual(factory_calls, ["SOURCE", "TARGET"])
 
+    def test_task_logs_endpoint_reads_selected_task_log_file(self):
+        cfg = make_config(require_login=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = os.path.join(tmp, "task.log")
+            report_path = os.path.join(tmp, "report.csv")
+            with open(log_path, "w", encoding="utf-8") as handle:
+                handle.write("before\nTask Started. Log: task.log\n上传完成\n")
+
+            class LogTaskManager(FakeTaskManager):
+                def snapshot(self, task_id=None):
+                    return {
+                        "task_id": task_id or "task-1",
+                        "state": "running",
+                        "logs": {"log_file": log_path, "report_file": report_path},
+                    }
+
+            _server, client, _saved, _cfg = self.make_server(cfg, task_manager=LogTaskManager())
+
+            status, data, _headers = client.request("GET", "/api/tasks/task-1/logs?max_bytes=200")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["log"]["task_id"], "task-1")
+        self.assertEqual(data["log"]["path"], log_path)
+        self.assertEqual(data["log"]["report_file"], report_path)
+        self.assertIn("Task Started", data["log"]["content"])
+        self.assertIn("上传完成", data["log"]["content"])
+
     def test_static_page_contains_shell_labels(self):
         _server, client, _saved, _cfg = self.make_server()
 
@@ -603,6 +632,9 @@ class WebConsoleServerTests(unittest.TestCase):
             "当前是目的端选择",
             "任务仪表盘",
             "日志 / 报告",
+            "实时任务日志",
+            "刷新日志",
+            "任务日志文件",
             "<h2>登录</h2>",
             "默认：admin",
             "默认是 admin / admin",
@@ -636,6 +668,7 @@ class WebConsoleServerTests(unittest.TestCase):
             "/api/task/pause",
             "/api/task/resume",
             "/api/task/stop",
+            "/logs",
         ):
             self.assertIn(endpoint, html)
         for marker in (
@@ -659,6 +692,9 @@ class WebConsoleServerTests(unittest.TestCase):
             'id="browser-go"',
             'id="browser-breadcrumbs"',
             'id="browser-status"',
+            'id="task-log-output"',
+            'id="refresh-logs"',
+            'function loadTaskLog',
             'class="explorer-tree"',
             'data-browser-scope="local"',
             'data-browser-scope="SOURCE"',
