@@ -3319,8 +3319,9 @@ def run_migration(cfg, controls=None):
         low_level_retries=low_level_retries,
         low_level_retry_sleep=low_level_retry_sleep,
         multipart_concurrency=multipart_concurrency,
+        controls=controls,
     )
-    checker_handler = TaskChecker(uploader, task_queue)
+    checker_handler = TaskChecker(uploader, task_queue, controls=controls)
     transfer_handler = TaskTransfer(uploader)
     checker_scheduler = Scheduler(
         check_queue,

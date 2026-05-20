@@ -4,6 +4,7 @@
 import logging
 import math
 import os
+import queue
 import random
 import shutil
 import threading
@@ -262,6 +263,7 @@ class OBSUploader:
         low_level_retries=None,
         low_level_retry_sleep=None,
         multipart_concurrency=None,
+        controls=None,
     ):
         self.progress = progress
         self.checkpoint = checkpoint
@@ -285,6 +287,7 @@ class OBSUploader:
             1,
             int(_multipart_concurrency if multipart_concurrency is None else multipart_concurrency),
         )
+        self.controls = controls
 
         self.lock = threading.Lock()
         self._server_side_copy_disabled = False
@@ -295,6 +298,8 @@ class OBSUploader:
     # 兼容旧入口：检查后传输
     # ================================
     def upload(self, task, heartbeat=None, worker_name=None):
+        if self._stop_requested():
+            return
         checked_task = self.check_task(task, heartbeat=heartbeat, worker_name=worker_name)
         if checked_task is None:
             return
@@ -304,12 +309,16 @@ class OBSUploader:
     # 作为 transfer handler 的入口
     # ================================
     def process(self, task, heartbeat=None, worker_name=None):
+        if self._stop_requested():
+            return
         self.transfer_task(task, heartbeat=heartbeat, worker_name=worker_name)
 
     # ================================
     # 执行预检查
     # ================================
     def check_task(self, task, heartbeat=None, worker_name=None):
+        if self._stop_requested():
+            return None
         if self.strict_client_check and _target_type == TARGET_TYPE_S3 and _client is None:
             raise RuntimeError("target client not initialized")
 
@@ -345,10 +354,27 @@ class OBSUploader:
     # 执行传输
     # ================================
     def transfer_task(self, task, heartbeat=None, worker_name=None):
+        if self._stop_requested():
+            return
         context = task.get("_transfer_ctx") or self._build_task_context(task)
         if context is None:
             return
         self._upload_with_retry(context, heartbeat=heartbeat)
+
+    def _stop_requested(self):
+        return self.controls is not None and self.controls.stop_requested()
+
+    def _sleep_or_stop(self, seconds):
+        if self.controls is None:
+            time.sleep(seconds)
+            return False
+
+        deadline = time.time() + max(float(seconds or 0), 0.0)
+        while time.time() < deadline:
+            if self._stop_requested():
+                return True
+            time.sleep(min(0.05, max(deadline - time.time(), 0.0)))
+        return self._stop_requested()
 
     # ================================
     # 构建任务上下文
@@ -442,6 +468,9 @@ class OBSUploader:
         last_err = ""
 
         while retry < self.retry_limit:
+            if self._stop_requested():
+                logging.info("[STOP] skip transfer after stop requested: %s", context["source_display"])
+                return
             start = time.time()
 
             try:
@@ -489,7 +518,12 @@ class OBSUploader:
                 self.progress.upload_error_inc()
                 last_err = repr(exc)
                 logging.exception("[RETRY] %s retry=%s", context["source_display"], retry)
-                time.sleep(min(2 ** retry + random.random(), 10))
+                if self._stop_requested():
+                    logging.info("[STOP] abort retry after stop requested: %s", context["source_display"])
+                    return
+                if self._sleep_or_stop(min(2 ** retry + random.random(), 10)):
+                    logging.info("[STOP] abort retry sleep after stop requested: %s", context["source_display"])
+                    return
 
         logging.error("[UPLOAD_FAIL] %s err=%s", context["source_display"], last_err)
         self.record_failed(context["source_display"])
@@ -1515,9 +1549,10 @@ class TaskChecker:
     # ================================
     # 初始化检查器
     # ================================
-    def __init__(self, uploader, transfer_queue):
+    def __init__(self, uploader, transfer_queue, controls=None):
         self.uploader = uploader
         self.transfer_queue = transfer_queue
+        self.controls = controls
 
     # ================================
     # 处理单个任务
@@ -1526,9 +1561,23 @@ class TaskChecker:
         checked_task = self.uploader.check_task(task, heartbeat=heartbeat, worker_name=worker_name)
         if checked_task is None:
             return
+        if self._stop_requested():
+            return
         if heartbeat is not None:
             heartbeat("enqueue-transfer")
-        self.transfer_queue.put(checked_task)
+        if self.controls is None:
+            self.transfer_queue.put(checked_task)
+            return
+
+        while not self._stop_requested():
+            try:
+                self.transfer_queue.put(checked_task, timeout=0.05)
+                return
+            except queue.Full:
+                continue
+
+    def _stop_requested(self):
+        return self.controls is not None and self.controls.stop_requested()
 
 
 # ================================

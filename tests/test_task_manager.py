@@ -13,6 +13,7 @@ from core.scanner import scan_directory
 import core.s3_scanner as s3_scanner_module
 from core.s3_scanner import scan_s3_sources
 from core.task_manager import MultiTaskManager, TaskControls, TaskManager
+from core.uploader import TaskChecker
 
 
 def wait_until(predicate, timeout=1.5):
@@ -225,6 +226,29 @@ class MultiTaskManagerTests(unittest.TestCase):
         self.assertEqual(cfg.get("SCAN", "scan_workers"), "3")
         self.assertEqual(cfg.get("UPLOAD", "multipart_concurrency"), "2")
         self.assertEqual(cfg.get("UPLOAD", "max_connections"), "80")
+
+    def test_checker_enqueue_unblocks_when_stop_requested(self):
+        controls = TaskControls()
+        transfer_queue = queue.Queue(maxsize=1)
+        transfer_queue.put({"occupied": True})
+        process_returned = threading.Event()
+
+        class FakeUploader:
+            def check_task(self, task, heartbeat=None, worker_name=None):
+                return dict(task)
+
+        checker = TaskChecker(FakeUploader(), transfer_queue, controls=controls)
+        thread = threading.Thread(target=lambda: (checker.process({"source": "a"}), process_returned.set()))
+        thread.start()
+        self.addCleanup(lambda: controls.stop_event.set())
+        self.addCleanup(lambda: thread.join(timeout=1))
+
+        time.sleep(0.1)
+        self.assertFalse(process_returned.is_set())
+        controls.stop_event.set()
+
+        self.assertTrue(process_returned.wait(timeout=1))
+        self.assertTrue(transfer_queue.full())
 
 
 def make_test_config(name, done=0):
