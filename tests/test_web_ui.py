@@ -609,6 +609,8 @@ class WebConsoleServerTests(unittest.TestCase):
             "此电脑",
             "转到",
             "加入迁移列表",
+            "请先在文件列表中单击选择",
+            "已加入迁移列表",
             "填入任务配置",
             "实时上传速度",
             "活跃 Worker",

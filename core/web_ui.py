@@ -1375,12 +1375,28 @@ INDEX_HTML = r"""<!doctype html>
       browse(true).catch(error => browserOutput.textContent = error.message);
     }
     async function addSelectedToList() {
-      if (!selectedBrowserItem) return;
+      if (!selectedBrowserItem) {
+        const message = "请先在文件列表中单击选择一个目录或对象。";
+        browserSelected.textContent = message;
+        browserOutput.textContent = message;
+        setStatus(message);
+        return;
+      }
+      const selectedPath = selectedBrowserItem.path || selectedBrowserItem.name || "";
+      if (!selectedPath) {
+        const message = "选中项目缺少可加入迁移列表的路径。";
+        browserSelected.textContent = message;
+        browserOutput.textContent = message;
+        setStatus(message);
+        return;
+      }
       const data = await api("/api/source-list", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: [selectedBrowserItem.path] })
+        body: JSON.stringify({ items: [selectedPath] })
       });
+      browserSelected.textContent = "已加入迁移列表：" + selectedPath;
+      setStatus("已加入迁移列表");
       browserOutput.textContent = JSON.stringify(data, null, 2);
     }
     function fillSelectedTaskConfig() {
