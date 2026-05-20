@@ -451,18 +451,6 @@ INDEX_HTML = r"""<!doctype html>
       background-size: 44px 44px;
       mask-image: linear-gradient(to bottom, #000 0, #000 60%, transparent 92%);
     }
-    body::after {
-      content: "";
-      position: fixed;
-      left: -20%;
-      right: -20%;
-      top: 31%;
-      height: 1px;
-      z-index: -1;
-      background: linear-gradient(90deg, transparent, rgba(96,165,250,.82), rgba(103,232,249,.58), transparent);
-      box-shadow: 0 0 24px rgba(96,165,250,.58);
-      pointer-events: none;
-    }
     button, input, select, textarea { font: inherit; }
     button {
       min-height: 42px;

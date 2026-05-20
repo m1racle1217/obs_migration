@@ -589,6 +589,7 @@ class WebConsoleServerTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertIn("text/html", headers["Content-Type"])
+        self.assertNotIn("body::after", html)
         for label in (
             "配置中心",
             "目录浏览",
