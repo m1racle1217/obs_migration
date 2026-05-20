@@ -596,6 +596,14 @@ INDEX_HTML = r"""<!doctype html>
     }
     .task-grid { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 14px; align-items: start; }
     .task-list { display: grid; gap: 10px; }
+    .task-editor {
+      margin-top: 14px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(7,15,31,.72);
+    }
+    .task-editor h2 { margin: 0 0 14px; font-size: 18px; }
     .task-card { padding: 15px; cursor: pointer; }
     .task-card.selected { border-color: var(--primary-strong); box-shadow: 0 0 0 2px rgba(96,165,250,.18); }
     .task-card h3 { margin: 0 0 8px; }
@@ -807,6 +815,16 @@ INDEX_HTML = r"""<!doctype html>
             <button id="resume-selected-task" type="button">继续</button>
             <button id="stop-selected-task" class="danger" type="button">停止</button>
           </div>
+          <div id="task-editor" class="task-editor hidden" data-page="dashboard">
+            <h2>新增任务配置</h2>
+            <div class="split">
+              <label>任务名 <input id="new-task-name" placeholder="例如：客户 A 迁移"></label>
+              <label>源路径/Prefix <input id="new-task-source" placeholder="可由目录浏览填入"></label>
+              <label>目标 Prefix <input id="new-task-target" placeholder="可选"></label>
+              <label>上传线程 <input id="new-task-upload-workers" type="number" min="1" value="32"></label>
+            </div>
+            <button id="create-task" class="primary" type="button">保存到任务列表</button>
+          </div>
           <div id="task-list" class="task-list" aria-label="任务列表"></div>
         </aside>
         <section class="panel">
@@ -823,17 +841,6 @@ INDEX_HTML = r"""<!doctype html>
           </div>
           <button id="save-concurrency" type="button">应用并发设置</button>
         </section>
-      </section>
-
-      <section id="task-editor" class="panel hidden" data-page="dashboard">
-        <h2>新增任务配置</h2>
-        <div class="split">
-          <label>任务名 <input id="new-task-name" placeholder="例如：客户 A 迁移"></label>
-          <label>源路径/Prefix <input id="new-task-source" placeholder="可由目录浏览填入"></label>
-          <label>目标 Prefix <input id="new-task-target" placeholder="可选"></label>
-          <label>上传线程 <input id="new-task-upload-workers" type="number" min="1" value="32"></label>
-        </div>
-        <button id="create-task" class="primary" type="button">保存到任务列表</button>
       </section>
 
       <section id="config" class="panel" data-page="config">
@@ -1101,8 +1108,16 @@ INDEX_HTML = r"""<!doctype html>
       document.getElementById("concurrency-scan").value = concurrency.scan_workers || 4;
       document.getElementById("concurrency-multipart").value = concurrency.multipart_concurrency || 4;
     }
+    function showNoTaskSelected() {
+      const message = "请先点击“新增任务”创建任务，或从任务列表选择一个任务。";
+      setStatus(message);
+      if (taskOutput) taskOutput.textContent = message;
+    }
     async function taskAction(action) {
-      if (!selectedTaskId) return;
+      if (!selectedTaskId) {
+        showNoTaskSelected();
+        return;
+      }
       const data = await api(`/api/tasks/${selectedTaskId}/${action}`, { method: "POST" });
       renderTask(data.task || data.status);
       await loadTasks();
@@ -1292,6 +1307,7 @@ INDEX_HTML = r"""<!doctype html>
       window.location.hash = "#dashboard";
       showPage("dashboard");
       document.getElementById("task-editor").classList.remove("hidden");
+      document.getElementById("task-editor").scrollIntoView({ behavior: "smooth", block: "start" });
       document.getElementById("new-task-source").value = selectedBrowserItem.path || selectedBrowserItem.name || "";
     }
     async function bootApp() {
@@ -1303,7 +1319,14 @@ INDEX_HTML = r"""<!doctype html>
     document.getElementById("login-button").addEventListener("click", login);
     document.getElementById("logout-button").addEventListener("click", logout);
     document.getElementById("refresh-tasks").addEventListener("click", () => loadTasks().catch(error => setStatus(error.message)));
-    document.getElementById("new-task-button").addEventListener("click", () => document.getElementById("task-editor").classList.toggle("hidden"));
+    document.getElementById("new-task-button").addEventListener("click", () => {
+      const editor = document.getElementById("task-editor");
+      const hidden = editor.classList.toggle("hidden");
+      if (!hidden) {
+        setStatus("新增任务配置已打开");
+        editor.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    });
     document.getElementById("create-task").addEventListener("click", () => createTask().catch(error => setStatus(error.message)));
     document.getElementById("start-selected-task").addEventListener("click", () => taskAction("start").catch(error => setStatus(error.message)));
     document.getElementById("pause-selected-task").addEventListener("click", () => taskAction("pause").catch(error => setStatus(error.message)));
