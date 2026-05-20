@@ -632,11 +632,121 @@ INDEX_HTML = r"""<!doctype html>
       font-family: ui-monospace, Consolas, monospace;
       white-space: pre-wrap;
     }
-    .browser-window { display: grid; gap: 12px; }
-    .browser-table { width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 14px; }
-    .browser-table th, .browser-table td { padding: 10px 12px; border-bottom: 1px solid rgba(96,165,250,.12); text-align: left; }
-    .browser-table tr { cursor: pointer; }
-    .browser-table tr:hover, .browser-table tr.selected { background: rgba(96,165,250,.12); }
+    .browser-window {
+      min-height: calc(100dvh - 190px);
+      display: grid;
+      grid-template-rows: auto auto minmax(360px, 1fr) auto;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(4,10,24,.5);
+      overflow: hidden;
+    }
+    .explorer-titlebar, .explorer-commandbar, .explorer-addressbar, .explorer-footer {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid rgba(96,165,250,.16);
+      padding: 10px 12px;
+      background: rgba(9,18,35,.76);
+    }
+    .explorer-titlebar { justify-content: space-between; }
+    .explorer-titlebar h2 { margin: 0; }
+    .explorer-commandbar { flex-wrap: wrap; }
+    .explorer-commandbar button {
+      min-height: 34px;
+      border-radius: 9px;
+      padding: 0 12px;
+      font-weight: 750;
+    }
+    .explorer-addressbar { display: grid; grid-template-columns: auto minmax(180px, 1fr) minmax(120px, 210px) auto; }
+    .explorer-addressbar input, .explorer-commandbar input, .explorer-commandbar select { min-height: 36px; border-radius: 9px; }
+    .explorer-commandbar select { width: auto; min-width: 140px; }
+    .explorer-search { width: min(260px, 32vw); margin-left: auto; }
+    .explorer-addressbar input { width: 100%; }
+    .explorer-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 0; }
+    .explorer-tree {
+      border-right: 1px solid rgba(96,165,250,.16);
+      background: rgba(6,13,28,.52);
+      padding: 10px;
+      overflow: auto;
+    }
+    .explorer-tree h3 {
+      margin: 12px 8px 8px;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .explorer-tree button {
+      width: 100%;
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      border-radius: 9px;
+      padding: 0 10px;
+      text-align: left;
+      background: transparent;
+      border-color: transparent;
+      color: var(--soft);
+    }
+    .explorer-tree button:hover, .explorer-tree button.active { background: rgba(96,165,250,.13); border-color: rgba(96,165,250,.2); }
+    .explorer-main { min-width: 0; overflow: auto; background: rgba(2,8,20,.38); }
+    .explorer-breadcrumbs {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-height: 34px;
+      padding: 0 12px;
+      color: var(--muted);
+      border-bottom: 1px solid rgba(96,165,250,.12);
+      background: rgba(3,9,22,.45);
+      white-space: nowrap;
+      overflow: auto;
+    }
+    .explorer-breadcrumbs span {
+      border: 1px solid rgba(96,165,250,.18);
+      border-radius: 8px;
+      padding: 4px 8px;
+      color: var(--soft);
+      background: rgba(96,165,250,.07);
+    }
+    .browser-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    .browser-table th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding: 9px 12px;
+      border-bottom: 1px solid rgba(96,165,250,.2);
+      background: rgba(10,20,38,.96);
+      color: var(--muted);
+      text-align: left;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .browser-table td { padding: 8px 12px; border-bottom: 1px solid rgba(96,165,250,.08); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .browser-table tr { cursor: default; }
+    .browser-table tr:hover, .browser-table tr.selected { background: rgba(96,165,250,.14); }
+    .file-name { display: flex; align-items: center; gap: 9px; }
+    .file-icon {
+      width: 18px;
+      height: 14px;
+      flex: 0 0 auto;
+      border: 1px solid rgba(147,197,253,.46);
+      border-radius: 3px;
+      background: linear-gradient(180deg, rgba(147,197,253,.26), rgba(59,130,246,.18));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.18);
+    }
+    .file-icon.file { height: 18px; border-radius: 4px; background: linear-gradient(180deg, rgba(226,232,240,.18), rgba(96,165,250,.1)); }
+    .file-icon.bucket { border-radius: 999px; background: linear-gradient(180deg, rgba(103,232,249,.18), rgba(37,99,235,.2)); }
+    .explorer-footer {
+      justify-content: space-between;
+      border-top: 1px solid rgba(96,165,250,.16);
+      border-bottom: 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .explorer-details summary { cursor: pointer; color: var(--muted); margin: 10px 0; }
     .worker-list { display: grid; gap: 8px; }
     .worker-item { border: 1px solid var(--line); border-radius: 12px; padding: 10px; color: var(--soft); background: rgba(96,165,250,.07); }
     .status-bar {
@@ -657,6 +767,9 @@ INDEX_HTML = r"""<!doctype html>
       .login-hero { min-height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
       .sidebar { position: relative; height: auto; }
       .status-bar { position: static; }
+      .browser-window { min-height: 560px; }
+      .explorer-addressbar, .explorer-layout { grid-template-columns: 1fr; }
+      .explorer-tree { border-right: 0; border-bottom: 1px solid rgba(96,165,250,.16); }
     }
   </style>
 </head>
@@ -746,36 +859,58 @@ INDEX_HTML = r"""<!doctype html>
       </section>
 
       <section id="browser" class="panel" data-page="browser">
-        <h2>目录浏览</h2>
         <div class="browser-window">
-          <div class="toolbar">
-            <button id="browser-back" type="button">后退</button>
-            <button id="browser-forward" type="button">前进</button>
-            <button id="browser-up" type="button">上一级</button>
-            <button id="browser-refresh" type="button">刷新</button>
+          <div class="explorer-titlebar">
+            <h2>目录浏览</h2>
+            <div class="actions">
+              <button id="browser-add-list" class="primary" type="button">加入迁移列表</button>
+              <button id="browser-fill-task" type="button">填入任务配置</button>
+            </div>
           </div>
-          <div class="split">
-            <label>位置
-              <select id="browser-scope">
-                <option value="local">本地</option>
-                <option value="SOURCE">SOURCE 远端</option>
-                <option value="TARGET">TARGET 远端</option>
-              </select>
-            </label>
-            <label>路径 / Prefix <input id="browser-path" placeholder="D:\\data 或 root/prefix"></label>
-            <label>Bucket <input id="browser-bucket" placeholder="远端可填"></label>
-            <label>搜索过滤 <input id="browser-filter" placeholder="按名称过滤"></label>
+          <div class="explorer-commandbar">
+            <button id="browser-back" type="button" title="后退">后退</button>
+            <button id="browser-forward" type="button" title="前进">前进</button>
+            <button id="browser-up" type="button" title="上一级">上一级</button>
+            <button id="browser-refresh" type="button" title="刷新">刷新</button>
+            <select id="browser-scope" aria-label="位置">
+              <option value="local">本地</option>
+              <option value="SOURCE">SOURCE 远端</option>
+              <option value="TARGET">TARGET 远端</option>
+            </select>
+            <input id="browser-filter" class="explorer-search" placeholder="搜索当前文件夹">
           </div>
-          <table id="browser-table" class="browser-table">
-            <thead><tr><th>名称</th><th>类型</th><th>大小</th><th>修改时间 / etag</th></tr></thead>
-            <tbody id="browser-body"></tbody>
-          </table>
-          <div class="toolbar">
-            <button id="browser-add-list" class="primary" type="button">加入迁移列表</button>
-            <button id="browser-fill-task" type="button">填入任务配置</button>
+          <div class="explorer-addressbar">
+            <span>地址</span>
+            <input id="browser-path" aria-label="路径 / Prefix" placeholder="D:\\data 或 root/prefix">
+            <input id="browser-bucket" aria-label="Bucket" placeholder="Bucket（远端）">
+            <button id="browser-go" type="button">转到</button>
           </div>
-          <pre id="browser-output">等待浏览...</pre>
+          <div class="explorer-layout">
+            <aside class="explorer-tree" aria-label="资源位置">
+              <h3>快速访问</h3>
+              <button type="button" data-browser-scope="local" data-browser-path=".">本地文件</button>
+              <button type="button" data-browser-scope="local" data-browser-path="..">上级目录</button>
+              <h3>对象存储</h3>
+              <button type="button" data-browser-scope="SOURCE" data-browser-path="">SOURCE 远端</button>
+              <button type="button" data-browser-scope="TARGET" data-browser-path="">TARGET 远端</button>
+            </aside>
+            <div class="explorer-main">
+              <div id="browser-breadcrumbs" class="explorer-breadcrumbs" aria-label="当前位置"></div>
+              <table id="browser-table" class="browser-table">
+                <thead><tr><th>名称</th><th>修改时间 / etag</th><th>类型</th><th>大小</th></tr></thead>
+                <tbody id="browser-body"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="explorer-footer">
+            <span id="browser-status">等待浏览...</span>
+            <span id="browser-selected">未选择项目</span>
+          </div>
         </div>
+        <details class="explorer-details">
+          <summary>原始响应</summary>
+          <pre id="browser-output">等待浏览...</pre>
+        </details>
       </section>
 
       <section id="logs" class="panel" data-page="logs">
@@ -805,6 +940,9 @@ INDEX_HTML = r"""<!doctype html>
     const configOutput = document.getElementById("config-output");
     const browserOutput = document.getElementById("browser-output");
     const browserBody = document.getElementById("browser-body");
+    const browserStatus = document.getElementById("browser-status");
+    const browserSelected = document.getElementById("browser-selected");
+    const browserBreadcrumbs = document.getElementById("browser-breadcrumbs");
     let selectedTaskId = null;
     let selectedBrowserItem = null;
     let browserHistory = [];
@@ -883,6 +1021,29 @@ INDEX_HTML = r"""<!doctype html>
         if (size < 1024 || unit === units[units.length - 1]) return unit === "B" ? size.toFixed(0) + unit : size.toFixed(1) + unit;
         size /= 1024;
       }
+    }
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, char => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      }[char]));
+    }
+    function browserKindLabel(kind) {
+      if (kind === "bucket") return "存储桶";
+      if (kind === "dir") return "文件夹";
+      return "文件";
+    }
+    function browserIconClass(kind) {
+      if (kind === "bucket") return "bucket";
+      if (kind === "file") return "file";
+      return "folder";
+    }
+    function browserDisplaySize(item) {
+      if (!item || item.kind !== "file") return "";
+      return bytes(item.size || 0);
     }
     function eta(seconds) {
       if (seconds === null || seconds === undefined || seconds < 0) return "--:--:--";
@@ -1045,7 +1206,11 @@ INDEX_HTML = r"""<!doctype html>
     }
     async function browse(pushHistory = true) {
       const loc = browserLocation();
-      if (pushHistory) browserHistory.push(Object.assign({}, loc));
+      if (pushHistory) {
+        browserHistory.push(Object.assign({}, loc));
+        browserForward = [];
+      }
+      browserStatus.textContent = "正在加载...";
       const params = new URLSearchParams({ page_size: "100", filter: loc.filter || "" });
       let data;
       if (loc.scope === "local") {
@@ -1059,20 +1224,47 @@ INDEX_HTML = r"""<!doctype html>
       }
       renderBrowser(data.page);
     }
+    function renderBreadcrumbs(page) {
+      const scope = document.getElementById("browser-scope").value;
+      const bucket = page.bucket || document.getElementById("browser-bucket").value || "";
+      const rawPath = page.prefix !== undefined ? page.prefix : (page.path || document.getElementById("browser-path").value || "");
+      const parts = [];
+      parts.push(scope === "local" ? "此电脑" : scope);
+      if (bucket) parts.push(bucket);
+      String(rawPath || "").replace(/\\/g, "/").split("/").filter(Boolean).forEach(part => parts.push(part));
+      browserBreadcrumbs.innerHTML = parts.map(part => `<span>${escapeHtml(part)}</span>`).join("<b>›</b>");
+    }
+    function syncBrowserTree(scope) {
+      document.querySelectorAll("[data-browser-scope]").forEach(button => {
+        button.classList.toggle("active", button.dataset.browserScope === scope);
+      });
+    }
     function renderBrowser(page) {
       selectedBrowserItem = null;
+      browserSelected.textContent = "未选择项目";
       browserOutput.textContent = JSON.stringify(page, null, 2);
       if (page.path !== undefined) document.getElementById("browser-path").value = page.path || "";
       if (page.bucket !== undefined) document.getElementById("browser-bucket").value = page.bucket || "";
       if (page.prefix !== undefined) document.getElementById("browser-path").value = page.prefix || "";
+      renderBreadcrumbs(page);
+      syncBrowserTree(document.getElementById("browser-scope").value);
       browserBody.innerHTML = "";
-      (page.items || []).forEach(item => {
+      const items = (page.items || []).slice().sort((left, right) => {
+        const leftRank = left.kind === "file" ? 1 : 0;
+        const rightRank = right.kind === "file" ? 1 : 0;
+        if (leftRank !== rightRank) return leftRank - rightRank;
+        return String(left.name || "").localeCompare(String(right.name || ""), "zh-CN");
+      });
+      browserStatus.textContent = `${items.length} 个项目`;
+      items.forEach(item => {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td>${item.name}</td><td>${item.kind}</td><td>${item.size || ""}</td><td>${item.etag || item.mtime || ""}</td>`;
+        const iconClass = browserIconClass(item.kind);
+        tr.innerHTML = `<td><span class="file-name"><span class="file-icon ${iconClass}"></span>${escapeHtml(item.name || "")}</span></td><td>${escapeHtml(item.mtime || item.etag || "")}</td><td>${browserKindLabel(item.kind)}</td><td>${browserDisplaySize(item)}</td>`;
         tr.addEventListener("click", () => {
           selectedBrowserItem = item;
           browserBody.querySelectorAll("tr").forEach(row => row.classList.remove("selected"));
           tr.classList.add("selected");
+          browserSelected.textContent = `已选择：${item.name || ""}`;
         });
         tr.addEventListener("dblclick", () => enterBrowserItem(item));
         browserBody.appendChild(tr);
@@ -1109,6 +1301,8 @@ INDEX_HTML = r"""<!doctype html>
     }
     function fillSelectedTaskConfig() {
       if (!selectedBrowserItem) return;
+      window.location.hash = "#dashboard";
+      showPage("dashboard");
       document.getElementById("task-editor").classList.remove("hidden");
       document.getElementById("new-task-source").value = selectedBrowserItem.path || selectedBrowserItem.name || "";
     }
@@ -1131,11 +1325,24 @@ INDEX_HTML = r"""<!doctype html>
     document.getElementById("reload-config").addEventListener("click", () => loadConfig().catch(error => configOutput.textContent = error.message));
     document.getElementById("save-config").addEventListener("click", () => saveConfig().catch(error => configOutput.textContent = error.message));
     document.getElementById("browser-refresh").addEventListener("click", () => browse(true).catch(error => browserOutput.textContent = error.message));
+    document.getElementById("browser-go").addEventListener("click", () => browse(true).catch(error => browserOutput.textContent = error.message));
+    document.getElementById("browser-scope").addEventListener("change", () => browse(true).catch(error => browserOutput.textContent = error.message));
+    document.getElementById("browser-filter").addEventListener("keydown", event => {
+      if (event.key === "Enter") browse(true).catch(error => browserOutput.textContent = error.message);
+    });
     document.getElementById("browser-up").addEventListener("click", browserUp);
     document.getElementById("browser-back").addEventListener("click", () => { if (browserHistory.length > 1) { browserForward.push(browserHistory.pop()); restoreBrowserLocation(browserHistory[browserHistory.length - 1]); } });
     document.getElementById("browser-forward").addEventListener("click", () => { const loc = browserForward.pop(); if (loc) { browserHistory.push(loc); restoreBrowserLocation(loc); } });
     document.getElementById("browser-add-list").addEventListener("click", () => addSelectedToList().catch(error => browserOutput.textContent = error.message));
     document.getElementById("browser-fill-task").addEventListener("click", fillSelectedTaskConfig);
+    document.querySelectorAll("[data-browser-scope]").forEach(button => {
+      button.addEventListener("click", () => {
+        document.getElementById("browser-scope").value = button.dataset.browserScope;
+        document.getElementById("browser-path").value = button.dataset.browserPath || "";
+        if (button.dataset.browserScope === "local") document.getElementById("browser-bucket").value = "";
+        browse(true).catch(error => browserOutput.textContent = error.message);
+      });
+    });
     window.addEventListener("hashchange", () => showPage());
     if (localStorage.getItem(AUTH_KEY)) {
       bootApp().catch(() => showLogin("登录已过期，请重新登录。"));
