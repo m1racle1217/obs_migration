@@ -104,6 +104,7 @@ def scan_s3_objects(
     scan_controller=None,
     low_level_retries=3,
     low_level_retry_sleep=0.5,
+    controls=None,
 ):
     total_scanned = 0
     source_prefix = _normalize_prefix(source_prefix)
@@ -124,10 +125,39 @@ def scan_s3_objects(
         scan_workers,
     )
 
+    def stop_requested():
+        return stop_event.is_set() or (controls is not None and controls.stop_requested())
+
+    def wait_if_paused():
+        if controls is not None:
+            controls.wait_if_paused(poll_interval=0.05)
+
+    def defer_claimed_prefix(prefix):
+        prefix_queue.put(prefix)
+        prefix_queue.task_done()
+
+    def enqueue_output_task(task):
+        if controls is None:
+            task_queue.put(task)
+            return True
+
+        while not stop_requested():
+            try:
+                task_queue.put(task, timeout=0.05)
+                return True
+            except queue.Full:
+                continue
+
+        return False
+
     # ================================
     # 去重入队前缀
     # ================================
     def enqueue_prefix(prefix):
+        wait_if_paused()
+        if stop_requested():
+            return
+
         normalized = sanitize_key(normalize_obs_key(prefix or ""))
         with seen_lock:
             if normalized in seen_prefixes:
@@ -142,7 +172,7 @@ def scan_s3_objects(
         nonlocal total_scanned
 
         marker = None
-        while not stop_event.is_set():
+        while not stop_requested():
             response = _list_objects(
                 source_client,
                 source_bucket,
@@ -159,10 +189,21 @@ def scan_s3_objects(
             if body is None:
                 break
 
+            wait_if_paused()
+            if stop_requested():
+                break
+
             for child_prefix in _extract_common_prefixes(body):
+                wait_if_paused()
+                if stop_requested():
+                    break
                 enqueue_prefix(child_prefix)
 
             for obj in getattr(body, "contents", []) or []:
+                wait_if_paused()
+                if stop_requested():
+                    break
+
                 normalized_source_key = sanitize_key(
                     normalize_obs_key(getattr(obj, "key", "") or "")
                 )
@@ -202,7 +243,12 @@ def scan_s3_objects(
                     "mtime": to_unix_timestamp(getattr(obj, "lastModified", None)),
                     "etag": getattr(obj, "etag", None),
                 }
-                task_queue.put(task)
+                wait_if_paused()
+                if stop_requested():
+                    break
+
+                if not enqueue_output_task(task):
+                    break
 
                 if reporter is not None and hasattr(reporter, "track_task"):
                     reporter.track_task(source_display, size=size)
@@ -223,17 +269,40 @@ def scan_s3_objects(
     # ================================
     def worker():
         while True:
+            wait_if_paused()
+
             if scan_controller is not None and not scan_controller.acquire_slot(cancel_event=stop_event):
                 return
 
+            wait_if_paused()
             current_prefix = prefix_queue.get()
+
+            if current_prefix is stop_token:
+                if scan_controller is not None:
+                    scan_controller.release_slot()
+                prefix_queue.task_done()
+                return
+
+            if stop_requested():
+                prefix_queue.task_done()
+                if scan_controller is not None:
+                    scan_controller.release_slot()
+                continue
+
+            if controls is not None and controls.pause_requested():
+                defer_claimed_prefix(current_prefix)
+                if scan_controller is not None:
+                    scan_controller.release_slot()
+                continue
+
             progress.scan_worker_started()
 
             try:
                 if current_prefix is stop_token:
                     return
 
-                if stop_event.is_set():
+                wait_if_paused()
+                if stop_requested():
                     continue
 
                 scan_prefix(current_prefix)
@@ -298,10 +367,14 @@ def scan_s3_sources(
     scan_controller=None,
     low_level_retries=3,
     low_level_retry_sleep=0.5,
+    controls=None,
 ):
     shared_scan_controller = scan_controller if len(entries or []) == 1 else None
     try:
         for entry in entries:
+            if controls is not None and controls.stop_requested():
+                break
+
             bucket = entry.get("bucket") or source_bucket
             prefix = entry.get("prefix") or entry.get("key") or ""
             scan_s3_objects(
@@ -317,6 +390,7 @@ def scan_s3_sources(
                 scan_controller=shared_scan_controller,
                 low_level_retries=low_level_retries,
                 low_level_retry_sleep=low_level_retry_sleep,
+                controls=controls,
             )
     finally:
         if scan_done_event is not None:

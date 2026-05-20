@@ -23,6 +23,7 @@ from .s3_scanner import scan_s3_objects, scan_s3_sources
 from .scan_control import AdaptiveScanController
 from .scanner import scan_directory, scan_local_sources
 from .scheduler import Scheduler
+from .task_manager import TaskControls, TaskManager
 from .uploader import (
     OBSUploader,
     TaskChecker,
@@ -31,6 +32,7 @@ from .uploader import (
     init_target,
     init_uploader,
 )
+from .web_ui import WebConsoleServer
 from .utils import (
     build_object_uri,
     detect_storage_scheme,
@@ -47,6 +49,9 @@ __all__ = [
     "scan_s3_objects",
     "scan_s3_sources",
     "Scheduler",
+    "TaskControls",
+    "TaskManager",
+    "WebConsoleServer",
     "OBSUploader",
     "TaskChecker",
     "TaskTransfer",

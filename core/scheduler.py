@@ -16,12 +16,21 @@ class Scheduler:
     # ================================
     # 初始化调度器
     # ================================
-    def __init__(self, task_queue, handler, workers=32, stage_name="worker", stall_timeout=300):
+    def __init__(
+        self,
+        task_queue,
+        handler,
+        workers=32,
+        stage_name="worker",
+        stall_timeout=300,
+        controls=None,
+    ):
         self.task_queue = task_queue
         self.handler = handler
         self.workers = max(1, int(workers or 1))
         self.stage_name = str(stage_name or "worker")
         self.stall_timeout = max(float(stall_timeout or 0), 1.0)
+        self.controls = controls
 
         self.threads = []
         self.lock = threading.Lock()
@@ -51,11 +60,17 @@ class Scheduler:
         worker_name = threading.current_thread().name
 
         while True:
+            if not self._wait_until_claim_allowed():
+                break
+
             try:
                 task = self.task_queue.get(timeout=1)
             except queue.Empty:
                 if not self.running:
                     break
+                continue
+
+            if not self._claim_still_allowed(task):
                 continue
 
             try:
@@ -72,6 +87,48 @@ class Scheduler:
                     self.worker_states.pop(worker_name, None)
 
                 self.task_queue.task_done()
+
+    # ================================
+    # 绛夊緟鎺у埗淇″彿鍏佽棰嗗彇浠诲姟
+    # ================================
+    def _wait_until_claim_allowed(self):
+        if self.controls is None:
+            return self.running
+
+        while self.running:
+            if self.controls.stop_requested():
+                return False
+            if not self.controls.pause_requested():
+                return True
+            self.controls.wait_if_paused(
+                poll_interval=0.05,
+                should_continue=lambda: self.running,
+            )
+
+        return False
+
+    # ================================
+    # 棰嗗彇鍚庡啀娆℃牎楠屾槸鍚﹀厑璁稿垎鍙?
+    # ================================
+    def _claim_still_allowed(self, task):
+        if self.controls is None:
+            return True
+
+        if self.controls.stop_requested():
+            self.task_queue.task_done()
+            return False
+
+        if not self.controls.pause_requested():
+            return True
+
+        self.controls.wait_if_paused(
+            poll_interval=0.05,
+            should_continue=lambda: self.running,
+        )
+        if not self.running or self.controls.stop_requested():
+            self.task_queue.task_done()
+            return False
+        return True
 
     # ================================
     # 分发任务给处理器

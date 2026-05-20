@@ -36,6 +36,7 @@ def _scan_local_entries(
     scan_workers=4,
     scan_done_event=None,
     scan_controller=None,
+    controls=None,
 ):
     stop_token = object()
 
@@ -50,6 +51,31 @@ def _scan_local_entries(
 
     total_scanned = 0
     scanned_lock = threading.Lock()
+
+    def stop_requested():
+        return controls is not None and controls.stop_requested()
+
+    def wait_if_paused():
+        if controls is not None:
+            controls.wait_if_paused(poll_interval=0.05)
+
+    def defer_claimed_item(item):
+        scan_queue.put(item)
+        scan_queue.task_done()
+
+    def enqueue_output_task(task):
+        if controls is None:
+            task_queue.put(task)
+            return True
+
+        while not stop_requested():
+            try:
+                task_queue.put(task, timeout=0.05)
+                return True
+            except queue.Full:
+                continue
+
+        return False
 
     # ================================
     # 计算相对路径
@@ -86,6 +112,10 @@ def _scan_local_entries(
     def handle_file(local_path_bytes, base_dir_bytes):
         nonlocal total_scanned
 
+        wait_if_paused()
+        if stop_requested():
+            return
+
         clean_name = clean_path_to_utf8(os.path.basename(local_path_bytes))
 
         if clean_name in IGNORE_FILES:
@@ -106,16 +136,21 @@ def _scan_local_entries(
         source_path = clean_path_to_utf8(local_path_bytes)
         relative_path = build_relative_path(local_path_bytes, base_dir_bytes)
 
-        task_queue.put(
-            {
-                "source_type": "local",
-                "local": local_path_bytes,
-                "source_path": source_path,
-                "relative_path": relative_path,
-                "size": size,
-                "mtime": stat_result.st_mtime,
-            }
-        )
+        wait_if_paused()
+        if stop_requested():
+            return
+
+        task = {
+            "source_type": "local",
+            "local": local_path_bytes,
+            "source_path": source_path,
+            "relative_path": relative_path,
+            "size": size,
+            "mtime": stat_result.st_mtime,
+        }
+        if not enqueue_output_task(task):
+            return
+
         if reporter is not None and hasattr(reporter, "track_task"):
             reporter.track_task(source_path, size=size)
 
@@ -131,9 +166,12 @@ def _scan_local_entries(
     # ================================
     def worker():
         while True:
+            wait_if_paused()
+
             if scan_controller is not None and not scan_controller.acquire_slot():
                 return
 
+            wait_if_paused()
             current_item = scan_queue.get()
 
             if current_item is stop_token:
@@ -142,17 +180,40 @@ def _scan_local_entries(
                 scan_queue.task_done()
                 return
 
+            if stop_requested():
+                scan_queue.task_done()
+                if scan_controller is not None:
+                    scan_controller.release_slot()
+                continue
+
+            if controls is not None and controls.pause_requested():
+                defer_claimed_item(current_item)
+                if scan_controller is not None:
+                    scan_controller.release_slot()
+                continue
+
             item_type, current_path_bytes, base_dir_bytes = current_item
             progress.scan_worker_started()
 
             try:
+                wait_if_paused()
+                if stop_requested():
+                    continue
+
                 if item_type == "file":
                     handle_file(current_path_bytes, base_dir_bytes)
                 else:
                     with os.scandir(current_path_bytes) as dir_iterator:
                         for entry in dir_iterator:
+                            wait_if_paused()
+                            if stop_requested():
+                                break
+
                             try:
                                 if entry.is_dir(follow_symlinks=False):
+                                    wait_if_paused()
+                                    if stop_requested():
+                                        break
                                     scan_queue.put(("dir", entry.path, base_dir_bytes))
                                     continue
 
@@ -235,6 +296,7 @@ def scan_directory(
     scan_done_event=None,
     scan_controller=None,
     base_dir=None,
+    controls=None,
 ):
     root_dir = root_dir or ""
     effective_base_dir = base_dir or root_dir
@@ -248,6 +310,7 @@ def scan_directory(
         scan_workers=scan_workers,
         scan_done_event=scan_done_event,
         scan_controller=scan_controller,
+        controls=controls,
     )
 
 
@@ -263,6 +326,7 @@ def scan_local_sources(
     scan_workers=4,
     scan_done_event=None,
     scan_controller=None,
+    controls=None,
 ):
     return _scan_local_entries(
         entries,
@@ -273,4 +337,5 @@ def scan_local_sources(
         scan_workers=scan_workers,
         scan_done_event=scan_done_event,
         scan_controller=scan_controller,
+        controls=controls,
     )

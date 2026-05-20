@@ -565,3 +565,31 @@ tests/                       # 测试用例
 - 只迁移一个本地目录、单文件或通配符匹配结果时，使用 `selection_mode = directory` + `SOURCE.path`。
 - 需要挑选多个目录、文件、S3 前缀或对象时，使用 `selection_mode = list` + `PATH.migration_list_file`。
 - 对象很多的 S3 前缀可以先用 `K` 筛选，再用 `F` 批量添加指定对象。
+
+## Web 控制台
+
+可以用配置或命令行开关启动本地 Web 控制台。控制台是无需前端构建工具的静态 Operations Shell，包含“配置”“目录浏览”“任务仪表盘”“日志/报告”四个区域。
+
+```ini
+[WEB_UI]
+enabled = false
+host = 127.0.0.1
+port = 8765
+require_login = true
+username = admin
+password = admin
+auto_open = false
+```
+
+启动方式：
+
+```powershell
+python obs_migrate.py --web
+```
+
+- `enabled`：设为 `true` 时，普通 `python obs_migrate.py` 也会启动 Web 控制台。
+- `--web`：临时启用 Web 控制台，不需要修改 `config.ini`。
+- `host` / `port`：监听地址和端口；端口被占用时启动错误会包含当前 host/port。
+- `require_login` / `username` / `password`：控制 API 登录；非本机监听建议保持登录开启。
+- `auto_open`：设为 `true` 时启动后自动打开浏览器。
+- Web 控制台启动后仍会在前台执行原 CLI 迁移流程；结束或中断时会关闭 Web 服务。

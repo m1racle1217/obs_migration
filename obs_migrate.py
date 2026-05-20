@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """提供 OBS / S3 兼容对象存储迁移工具的命令行入口。"""
 
+import argparse
 import configparser
 import glob
 import logging
@@ -13,6 +14,7 @@ import sys
 import threading
 import time
 import unicodedata
+import webbrowser
 from datetime import datetime
 
 for _stream in (sys.stdout, sys.stderr):
@@ -78,7 +80,9 @@ from core import (
     scan_s3_sources,
 )
 from core.obs_index import build_obs_index
+from core.task_manager import TaskManager
 from core.utils import build_object_uri, detect_storage_scheme, parse_size, sanitize_key, setup_logger
+from core.web_ui import WebConsoleServer
 
 colorama_init(autoreset=True)
 
@@ -103,6 +107,7 @@ SENSITIVE_FIELDS = {
     (SOURCE_SECTION, "sk"),
     (TARGET_SECTION, "ak"),
     (TARGET_SECTION, "sk"),
+    ("WEB_UI", "password"),
 }
 
 CONFIG_DESC = {
@@ -149,6 +154,13 @@ CONFIG_DESC = {
     "PATH.migration_list_file": "源端列表模式清单文件（相对配置文件目录解析，默认 migration_list.txt）",
     "UI.prompt_config": "启动时是否允许交互修改配置（支持直接输入编号修改）",
     "UI.show_dashboard": "是否显示实时仪表盘",
+    "WEB_UI.enabled": "是否启用 Web 控制台",
+    "WEB_UI.host": "Web 控制台监听地址",
+    "WEB_UI.port": "Web 控制台监听端口",
+    "WEB_UI.require_login": "Web 控制台是否要求登录",
+    "WEB_UI.username": "Web 控制台登录用户名",
+    "WEB_UI.password": "Web 控制台登录密码",
+    "WEB_UI.auto_open": "启动 Web 控制台后是否自动打开浏览器",
 }
 
 SECTION_TITLES = {
@@ -159,6 +171,7 @@ SECTION_TITLES = {
     "CHECK": "校验器配置",
     "PATH": "运行目录配置",
     "UI": "界面配置",
+    "WEB_UI": "Web 控制台配置",
 }
 
 REMOTE_ENDPOINT_KEYS = ("ak", "sk", "endpoint", "bucket", "prefix")
@@ -199,6 +212,7 @@ CONFIG_MENU_GROUPS = [
     {"id": "check", "title": "校验与比对配置", "sections": ["CHECK"]},
     {"id": "path", "title": "运行目录配置", "sections": ["PATH"]},
     {"id": "ui", "title": "UI 界面配置", "sections": ["UI"]},
+    {"id": "web_ui", "title": "Web 控制台配置", "sections": ["WEB_UI"]},
 ]
 
 
@@ -274,6 +288,15 @@ DEFAULT_CONFIG = {
     "UI": {
         "prompt_config": "true",
         "show_dashboard": "true",
+    },
+    "WEB_UI": {
+        "enabled": "false",
+        "host": "127.0.0.1",
+        "port": "8765",
+        "require_login": "true",
+        "username": "admin",
+        "password": "admin",
+        "auto_open": "false",
     },
 }
 
@@ -2715,13 +2738,17 @@ def _migrate_legacy_task_section(cfg):
 # ================================
 # 初始化配置
 # ================================
-def init_config():
+def init_config(prompt=True):
     print("\n首次运行，初始化配置\n")
 
     cfg = configparser.ConfigParser()
     for section, items in DEFAULT_CONFIG.items():
         cfg[section] = {}
         for key, default_value in items.items():
+            if not prompt:
+                cfg[section][key] = default_value
+                continue
+
             desc = CONFIG_DESC.get(f"{section}.{key}", "")
             if desc:
                 print(f"\n{desc}")
@@ -2860,10 +2887,10 @@ def _prompt_config_action(mapping):
 # ================================
 # 加载配置
 # ================================
-def load_config():
+def load_config(prompt=True):
     config_file = resolve_config_file()
     if not os.path.exists(config_file):
-        return init_config()
+        return init_config(prompt=prompt)
 
     cfg = configparser.ConfigParser()
     cfg.read(config_file, encoding="utf-8")
@@ -2938,10 +2965,14 @@ def load_config():
         write_config_with_comments(cfg)
         print(f"\n检测到新配置项，已自动更新 {resolve_config_file()}\n")
 
-    if should_prompt_config(cfg):
+    if prompt and should_prompt_config(cfg):
         run_config_menu(cfg)
 
     return cfg
+
+
+def load_config_for_web():
+    return load_config(prompt=False)
 
 
 # ================================
@@ -3126,341 +3157,7 @@ def _ensure_secret_fields_encrypted(cfg):
 # ================================
 # 主流程
 # ================================
-def _legacy_main():
-    ensure_dirs()
-
-    cfg = load_config()
-    validate_config(cfg)
-    _ensure_secret_fields_encrypted(cfg)
-
-    source_type = _normalize_mode(cfg.get(SOURCE_SECTION, "type", fallback=MODE_LOCAL), default=MODE_LOCAL)
-    target_type = _normalize_mode(cfg.get(TARGET_SECTION, "type", fallback=MODE_S3), default=MODE_S3)
-
-    source_path = cfg.get(SOURCE_SECTION, "path", fallback="").strip()
-    source_selection_mode = get_source_selection_mode(cfg)
-    source_paths = serialize_source_path_list(_source_path_list(cfg))
-    source_ak = _decrypt_from_config(cfg, SOURCE_SECTION, "ak")
-    source_sk = _decrypt_from_config(cfg, SOURCE_SECTION, "sk")
-    source_endpoint = cfg.get(SOURCE_SECTION, "endpoint", fallback="").strip()
-    source_bucket = cfg.get(SOURCE_SECTION, "bucket", fallback="").strip()
-    source_prefix = sanitize_key(cfg.get(SOURCE_SECTION, "prefix", fallback="")).strip("/")
-
-    target_path = cfg.get(TARGET_SECTION, "path", fallback="").strip()
-    target_ak = _decrypt_from_config(cfg, TARGET_SECTION, "ak")
-    target_sk = _decrypt_from_config(cfg, TARGET_SECTION, "sk")
-    target_endpoint = cfg.get(TARGET_SECTION, "endpoint", fallback="").strip()
-    target_bucket = cfg.get(TARGET_SECTION, "bucket", fallback="").strip()
-    target_prefix = sanitize_key(cfg.get(TARGET_SECTION, "prefix", fallback="")).strip("/")
-
-    source_label = (
-        _local_source_label(source_selection_mode, source_path, source_paths)
-        if source_type == MODE_LOCAL
-        else _s3_source_label(source_selection_mode, source_bucket, source_prefix, source_paths)
-    )
-    local_source_plan = build_local_source_plan_from_config(cfg) if source_type == MODE_LOCAL else None
-    s3_source_entries = build_s3_source_entries_from_config(cfg) if source_type == MODE_S3 else None
-
-    workers = cfg.getint("UPLOAD", "workers")
-    retry_limit = cfg.getint("UPLOAD", "retry")
-    rate_limit = cfg.getint("UPLOAD", "rate_limit")
-
-    log_dir = resolve_runtime_path(cfg.get("PATH", "log_dir"))
-    state_dir = resolve_runtime_path(cfg.get("PATH", "state_dir"))
-    failed_dir = resolve_runtime_path(cfg.get("PATH", "failed_dir"))
-
-    requested_scan_workers = cfg.getint("SCAN", "scan_workers", fallback=4)
-    if source_type == MODE_LOCAL:
-        scan_workers = resolve_scan_workers(requested_scan_workers)
-    else:
-        scan_workers = resolve_remote_scan_workers(requested_scan_workers)
-
-    enable_head = cfg.getboolean("CHECK", "enable_head_check", fallback=True)
-    strict_check = cfg.getboolean("CHECK", "strict_client_check", fallback=True)
-    enable_etag = cfg.getboolean("CHECK", "enable_etag_check", fallback=False)
-
-    report_dir = resolve_runtime_path("./check_report")
-    os.makedirs(report_dir, exist_ok=True)
-
-    log_file = build_log_file(log_dir, source_label)
-    setup_logger(log_file)
-    logging.getLogger().propagate = False
-    if local_source_plan is not None and local_source_plan["has_glob"]:
-        logging.info(
-            "[SOURCE_GLOB] pattern=%s preserve_root=%s matched_entries=%s",
-            source_path,
-            local_source_plan["base_dir"],
-            local_source_plan["match_count"],
-        )
-
-    if scan_workers != requested_scan_workers:
-        if source_type == MODE_LOCAL:
-            adjust_reason = f"本地扫描按 CPU 自适应限流（当前上限 {scan_workers}）"
-        else:
-            adjust_reason = f"远端扫描线程上限为 {scan_workers}"
-        print(
-            f"\n⚠️ 扫描线程配置过高，已从 {requested_scan_workers} 自动调整为 {scan_workers}（{adjust_reason}）\n"
-        )
-        logging.warning(
-            "[SCAN] requested workers=%s adjusted to %s for source_type=%s reason=%s",
-            requested_scan_workers,
-            scan_workers,
-            source_type,
-            adjust_reason,
-        )
-
-    db_path = os.path.join(state_dir, "tasks.db")
-    checkpoint = Checkpoint(db_path)
-    checkpoint.reset_obs_index()
-
-    is_local_single_file = (
-        source_type == MODE_LOCAL
-        and local_source_plan is not None
-        and not local_source_plan["has_glob"]
-        and len(local_source_plan["entries"]) == 1
-        and local_source_plan["entries"][0]["type"] == "file"
-    )
-    progress = Progress()
-    task_queue = queue.Queue(maxsize=cfg.getint("SCAN", "queue_size"))
-    scan_controller = None
-    if not is_local_single_file and scan_workers > 1:
-        scan_controller = AdaptiveScanController(
-            task_queue,
-            max_workers=scan_workers,
-            min_workers=resolve_min_scan_workers(scan_workers),
-        )
-
-    init_target(
-        target_type,
-        parse_size(cfg.get("UPLOAD", "part_size")),
-        parse_size(cfg.get("UPLOAD", "multipart_threshold")),
-        rate_limit=rate_limit,
-        ak=target_ak,
-        sk=target_sk,
-        endpoint=target_endpoint,
-        bucket=target_bucket,
-        path=target_path,
-        prefix=target_prefix,
-    )
-    init_source_client(
-        source_ak,
-        source_sk,
-        source_endpoint,
-        source_bucket,
-    )
-
-    reporter = Reporter(report_dir, source_label)
-    uploader = OBSUploader(
-        progress,
-        checkpoint,
-        reporter=reporter,
-        failed_dir=failed_dir,
-        enable_head_check=enable_head,
-        strict_client_check=strict_check,
-        enable_etag_check=enable_etag,
-        retry_limit=retry_limit,
-    )
-    scheduler = Scheduler(task_queue, uploader, workers=workers)
-
-    pipeline_status = {
-        "index": "pending" if target_type == MODE_S3 else "n/a",
-        "scan": "n/a" if is_local_single_file else "pending",
-    }
-    pipeline_status_lock = threading.Lock()
-    interrupted = False
-
-    # ================================
-    # 更新流水线状态
-    # ================================
-    def set_status(name, value):
-        with pipeline_status_lock:
-            pipeline_status[name] = value
-
-    # ================================
-    # 获取流水线状态快照
-    # ================================
-    def get_status():
-        with pipeline_status_lock:
-            return dict(pipeline_status)
-
-    dashboard = Dashboard(
-        progress,
-        task_queue,
-        scheduler,
-        scan_workers=scan_workers,
-        enabled=should_enable_dashboard(cfg),
-        force_terminal=should_force_terminal(),
-        status_provider=get_status,
-        scan_controller=scan_controller,
-        language=get_ui_language(cfg),
-    )
-
-    # ================================
-    # 构建目标端对象索引
-    # ================================
-    def run_index():
-        if target_type != MODE_S3:
-            set_status("index", "n/a")
-            return
-
-        set_status("index", "running")
-        try:
-            build_obs_index(
-                target_ak,
-                target_sk,
-                target_endpoint,
-                target_bucket,
-                target_prefix,
-                checkpoint,
-            )
-        except Exception:
-            set_status("index", "error")
-            raise
-        else:
-            set_status("index", "done")
-
-    index_thread = threading.Thread(target=run_index, daemon=True) if target_type == MODE_S3 else None
-    scan_thread = None
-    scan_done_event = threading.Event()
-
-    # ================================
-    # 启动索引、扫描与上传流程
-    # ================================
-    def start_work():
-        nonlocal scan_thread
-
-        progress.start()
-        scheduler.start()
-        if index_thread is not None:
-            index_thread.start()
-
-        if is_local_single_file:
-            single_entry = local_source_plan["entries"][0]
-            single_path = single_entry["path"]
-            st = os.stat(single_path)
-            filename = os.path.basename(single_path)
-            if hasattr(reporter, "track_task"):
-                reporter.track_task(
-                    single_path,
-                    size=st.st_size,
-                )
-            task_queue.put(
-                {
-                    "source_type": MODE_LOCAL,
-                    "local": single_path,
-                    "source_path": single_path,
-                    "relative_path": filename,
-                    "size": st.st_size,
-                    "mtime": st.st_mtime,
-                }
-            )
-            progress.add_total(st.st_size)
-            scan_done_event.set()
-            return
-
-        if source_type == MODE_LOCAL:
-            # ================================
-            # 执行本地目录扫描
-            # ================================
-            def run_local_scan():
-                set_status("scan", "running")
-                try:
-                    scan_local_sources(
-                        local_source_plan["entries"],
-                        task_queue,
-                        progress,
-                        checkpoint,
-                        reporter,
-                        scan_workers,
-                        scan_done_event,
-                        scan_controller=scan_controller,
-                    )
-                except Exception:
-                    set_status("scan", "error")
-                    scan_done_event.set()
-                    raise
-                else:
-                    set_status("scan", "done")
-
-            scan_thread = threading.Thread(target=run_local_scan, daemon=True)
-            scan_thread.start()
-            return
-
-        # ================================
-        # 执行对象存储扫描
-        # ================================
-        def run_s3_scan():
-            set_status("scan", "running")
-            try:
-                scan_s3_sources(
-                    s3_source_entries,
-                    uploader_module._source_client,
-                    source_bucket,
-                    task_queue,
-                    progress,
-                    reporter,
-                    scan_workers=scan_workers,
-                    scan_done_event=scan_done_event,
-                    source_scheme=uploader_module._source_uri_scheme,
-                    scan_controller=scan_controller,
-                )
-            except Exception:
-                set_status("scan", "error")
-                scan_done_event.set()
-                raise
-            else:
-                set_status("scan", "done")
-
-        scan_thread = threading.Thread(target=run_s3_scan, daemon=True)
-        scan_thread.start()
-
-    try:
-        logging.info("Task Started. Log: %s", log_file)
-
-        # ================================
-        # 判断整体任务是否完成
-        # ================================
-        def work_finished():
-            if is_local_single_file:
-                return task_queue.unfinished_tasks == 0
-
-            return scan_done_event.is_set() and task_queue.unfinished_tasks == 0
-
-        dashboard.run_until(
-            work_finished,
-            poll_interval=0.2,
-            start_fn=start_work,
-        )
-    except KeyboardInterrupt:
-        interrupted = True
-        logging.warning("用户手动停止任务")
-    finally:
-        if scan_thread is not None:
-            scan_thread.join(timeout=5)
-
-        scheduler.stop()
-        progress.stop()
-        checkpoint.close()
-        dashboard.stop()
-        reporter.close(
-            pending_status="INTERRUPTED" if interrupted else None,
-            pending_message="detected_but_not_migrated",
-        )
-
-        print("\n" + "=" * 50)
-        print("✨ 任务结束")
-        print("日志:", log_file)
-        print("数据库:", db_path)
-        print("对比报告:", reporter.file)
-        print("=" * 50)
-
-
-def main():
-    ensure_dirs()
-
-    cfg = load_config()
-    validate_config(cfg)
-    _ensure_secret_fields_encrypted(cfg)
-
+def run_migration(cfg, controls=None):
     source_type = _normalize_mode(cfg.get(SOURCE_SECTION, "type", fallback=MODE_LOCAL), default=MODE_LOCAL)
     target_type = _normalize_mode(cfg.get(TARGET_SECTION, "type", fallback=MODE_S3), default=MODE_S3)
 
@@ -3630,6 +3327,7 @@ def main():
         workers=checker_workers,
         stage_name="check",
         stall_timeout=worker_stall_timeout,
+        controls=controls,
     )
     scheduler = Scheduler(
         task_queue,
@@ -3637,6 +3335,7 @@ def main():
         workers=workers,
         stage_name="upload",
         stall_timeout=worker_stall_timeout,
+        controls=controls,
     )
 
     enable_index_build = target_type == MODE_S3 and compare_mode != "head_only"
@@ -3665,6 +3364,18 @@ def main():
         with background_error_lock:
             if background_error[0] is None:
                 background_error[0] = exc
+
+    def publish_controls_status():
+        if controls is None:
+            return
+        controls.update_status(
+            progress=progress.snapshot(),
+            pipeline=get_status(),
+            workers={
+                "check": checker_scheduler.get_status_snapshot(),
+                "upload": scheduler.get_status_snapshot(),
+            },
+        )
 
     dashboard = Dashboard(
         progress,
@@ -3715,6 +3426,15 @@ def main():
     def start_work():
         nonlocal scan_thread
 
+        if controls is not None and controls.stop_requested():
+            set_status("scan", "stopped")
+            set_status("check", "stopped")
+            scan_done_event.set()
+            if index_stop_event is not None:
+                index_stop_event.set()
+            publish_controls_status()
+            return
+
         progress.start()
         checker_scheduler.start()
         scheduler.start()
@@ -3758,6 +3478,7 @@ def main():
                         scan_workers,
                         scan_done_event,
                         scan_controller=scan_controller,
+                        controls=controls,
                     )
                 except Exception as exc:
                     set_status("scan", "error")
@@ -3787,6 +3508,7 @@ def main():
                     scan_controller=scan_controller,
                     low_level_retries=low_level_retries,
                     low_level_retry_sleep=low_level_retry_sleep,
+                    controls=controls,
                 )
             except Exception as exc:
                 set_status("scan", "error")
@@ -3803,11 +3525,28 @@ def main():
         logging.info("Task Started. Log: %s", log_file)
 
         def work_finished():
+            nonlocal interrupted
+
             with background_error_lock:
                 if background_error[0] is not None:
                     raise background_error[0]
 
             index_finished = index_thread is None or not index_thread.is_alive()
+            if controls is not None and controls.stop_requested():
+                interrupted = True
+                if index_stop_event is not None:
+                    index_stop_event.set()
+                scan_done_event.set()
+                set_status("check", "stopping")
+                if not is_local_single_file:
+                    set_status("scan", "stopping")
+                publish_controls_status()
+                return (
+                    checker_scheduler.get_active_workers() == 0
+                    and scheduler.get_active_workers() == 0
+                    and index_finished
+                )
+
             queues_finished = (
                 scan_done_event.is_set()
                 and check_queue.unfinished_tasks == 0
@@ -3819,7 +3558,9 @@ def main():
                 index_stop_event.set()
             if queues_finished and index_finished:
                 set_status("check", "done")
+                publish_controls_status()
                 return True
+            publish_controls_status()
             return False
 
         dashboard.run_until(
@@ -3841,6 +3582,7 @@ def main():
         checker_scheduler.stop()
         scheduler.stop()
         progress.stop()
+        publish_controls_status()
         checkpoint.close()
         dashboard.stop()
         reporter.close(
@@ -3854,6 +3596,100 @@ def main():
         print("数据库:", db_path)
         print("对比报告:", reporter.file)
         print("=" * 50)
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="OBS / S3 migration tool")
+    parser.add_argument("--web", action="store_true", help="启动 Web 控制台")
+    return parser.parse_args(argv)
+
+
+def should_start_web_ui(cfg, web_flag=False):
+    if web_flag:
+        return True
+    return cfg.getboolean("WEB_UI", "enabled", fallback=False)
+
+
+def _new_task_manager():
+    return TaskManager(run_migration)
+
+
+def _start_web_console(cfg, task_manager):
+    host = cfg.get("WEB_UI", "host", fallback="127.0.0.1")
+    port = cfg.get("WEB_UI", "port", fallback="8765")
+    server = None
+    try:
+        server = WebConsoleServer(
+            cfg,
+            task_manager,
+            load_config_for_web,
+            write_config_with_comments,
+            decrypt_value,
+            encrypt_value,
+            runtime_path_resolver=resolve_runtime_path,
+        )
+        server.start()
+    except OSError as exc:
+        _shutdown_web_runtime(server, task_manager)
+        raise RuntimeError(f"Web 控制台启动失败 ({host}:{port}): {exc}") from exc
+    except Exception as exc:
+        _shutdown_web_runtime(server, task_manager)
+        raise RuntimeError(f"Web 控制台启动失败 ({host}:{port}): {exc}") from exc
+
+    print(f"Web 控制台: {server.url}")
+    if cfg.getboolean("WEB_UI", "auto_open", fallback=False):
+        try:
+            webbrowser.open(server.url)
+        except Exception as exc:
+            print(f"⚠️ 浏览器自动打开失败: {exc}")
+    return server
+
+
+def _shutdown_web_runtime(server, task_manager, join_timeout=5):
+    if task_manager is not None:
+        try:
+            task_manager.stop()
+        except Exception as exc:
+            print(f"⚠️ Web 任务停止失败: {exc}")
+
+    if server is not None:
+        try:
+            server.stop()
+        except Exception as exc:
+            print(f"⚠️ Web 控制台关闭失败: {exc}")
+
+    if task_manager is not None and hasattr(task_manager, "join"):
+        try:
+            task_manager.join(timeout=join_timeout)
+        except Exception as exc:
+            print(f"⚠️ Web 任务等待结束失败: {exc}")
+
+
+def main(argv=None):
+    ensure_dirs()
+
+    args = parse_args(argv)
+    cfg = load_config(prompt=False)
+    start_web = should_start_web_ui(cfg, args.web)
+    if not start_web and should_prompt_config(cfg):
+        run_config_menu(cfg)
+
+    validate_config(cfg)
+    _ensure_secret_fields_encrypted(cfg)
+
+    if not start_web:
+        return run_migration(cfg)
+
+    task_manager = _new_task_manager()
+    server = _start_web_console(cfg, task_manager)
+    try:
+        started = task_manager.start(cfg)
+        if not started:
+            print("Web 任务已在运行，等待当前任务结束")
+        task_manager.join()
+        return None
+    finally:
+        _shutdown_web_runtime(server, task_manager)
 
 
 if __name__ == "__main__":

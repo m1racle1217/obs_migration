@@ -1,0 +1,673 @@
+import queue
+import threading
+import time
+import unittest
+from types import SimpleNamespace
+from tempfile import TemporaryDirectory
+from pathlib import Path
+from unittest.mock import patch
+
+from core.progress import Progress
+from core.scheduler import Scheduler
+from core.scanner import scan_directory
+import core.s3_scanner as s3_scanner_module
+from core.s3_scanner import scan_s3_sources
+from core.task_manager import TaskControls, TaskManager
+
+
+def wait_until(predicate, timeout=1.5):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
+
+
+class TaskManagerTests(unittest.TestCase):
+    def test_immediate_pause_during_start_is_not_overwritten_by_running(self):
+        release = threading.Event()
+
+        def runner(cfg, controls):
+            release.wait(timeout=1)
+
+        manager = TaskManager(runner)
+        original_mark_started = manager._mark_started
+
+        def pause_before_mark_started(controls):
+            manager.pause()
+            original_mark_started(controls)
+
+        manager._mark_started = pause_before_mark_started
+        self.addCleanup(lambda: release.set())
+        self.addCleanup(lambda: manager.resume())
+        self.addCleanup(lambda: manager.join(timeout=1))
+
+        self.assertTrue(manager.start({}))
+        self.assertTrue(wait_until(lambda: manager.controls is not None and manager.controls.pause_requested()))
+
+        snapshot = manager.snapshot()
+        self.assertTrue(manager.controls.pause_requested())
+        self.assertIn(snapshot["state"], {"pausing", "paused"})
+
+    def test_task_completes_and_exposes_status_snapshot(self):
+        def runner(cfg, controls):
+            controls.update_status(
+                progress={"files_done": 1},
+                pipeline={"scan": "done"},
+                workers={"upload": {"active_workers": 0}},
+            )
+
+        manager = TaskManager(runner)
+
+        self.assertTrue(manager.start({"source": "unit"}))
+        self.assertTrue(manager.join(timeout=1))
+
+        snapshot = manager.snapshot()
+        self.assertEqual(snapshot["state"], "completed")
+        self.assertEqual(snapshot["progress"], {"files_done": 1})
+        self.assertEqual(snapshot["pipeline"], {"scan": "done"})
+        self.assertEqual(snapshot["workers"], {"upload": {"active_workers": 0}})
+        self.assertIsNone(snapshot["error"])
+        self.assertIsNotNone(snapshot["timestamps"]["started_at"])
+        self.assertIsNotNone(snapshot["timestamps"]["finished_at"])
+
+    def test_prevents_concurrent_start(self):
+        release = threading.Event()
+
+        def runner(cfg, controls):
+            release.wait(timeout=1)
+
+        manager = TaskManager(runner)
+
+        self.assertTrue(manager.start({"run": 1}))
+        self.assertFalse(manager.start({"run": 2}))
+        release.set()
+        self.assertTrue(manager.join(timeout=1))
+        self.assertEqual(manager.snapshot()["state"], "completed")
+
+    def test_pause_resume_stop_are_idempotent(self):
+        started = threading.Event()
+
+        def runner(cfg, controls):
+            started.set()
+            while not controls.stop_requested():
+                controls.wait_if_paused(poll_interval=0.01)
+                time.sleep(0.01)
+
+        manager = TaskManager(runner)
+
+        self.assertTrue(manager.start({}))
+        self.assertTrue(started.wait(timeout=1))
+
+        manager.pause()
+        manager.pause()
+        self.assertEqual(manager.snapshot()["state"], "paused")
+        self.assertTrue(manager.controls.pause_requested())
+
+        manager.resume()
+        manager.resume()
+        self.assertEqual(manager.snapshot()["state"], "running")
+        self.assertFalse(manager.controls.pause_requested())
+
+        manager.stop()
+        manager.stop()
+        self.assertTrue(manager.controls.stop_requested())
+        self.assertTrue(manager.join(timeout=1))
+        self.assertEqual(manager.snapshot()["state"], "stopped")
+
+    def test_failure_state_captures_error(self):
+        def runner(cfg, controls):
+            raise RuntimeError("boom")
+
+        manager = TaskManager(runner)
+
+        self.assertTrue(manager.start({}))
+        self.assertTrue(manager.join(timeout=1))
+
+        snapshot = manager.snapshot()
+        self.assertEqual(snapshot["state"], "failed")
+        self.assertIn("boom", snapshot["error"])
+
+
+class SchedulerControlsTests(unittest.TestCase):
+    def test_scheduler_balances_claimed_task_when_stop_arrives_before_dispatch(self):
+        processed = []
+        controls = TaskControls()
+
+        class StopAfterGetQueue(queue.Queue):
+            def get(self, *args, **kwargs):
+                task = super().get(*args, **kwargs)
+                controls.stop_event.set()
+                return task
+
+        task_queue = StopAfterGetQueue()
+        task_queue.put({"source_path": "a.txt"})
+
+        class Handler:
+            def process(self, task, heartbeat=None, worker_name=None):
+                processed.append(task)
+
+        scheduler = Scheduler(
+            task_queue,
+            Handler(),
+            workers=1,
+            stage_name="check",
+            controls=controls,
+        )
+
+        scheduler.start()
+        self.assertTrue(wait_until(lambda: controls.stop_requested()))
+        scheduler.stop()
+
+        self.assertEqual(processed, [])
+        self.assertEqual(task_queue.unfinished_tasks, 0)
+        self.assertTrue(task_queue.empty())
+
+    def test_scheduler_stop_does_not_hang_when_requeue_slot_is_refilled(self):
+        processed = []
+        controls = TaskControls()
+
+        class RefillAfterGetQueue(queue.Queue):
+            def get(self, *args, **kwargs):
+                task = super().get(*args, **kwargs)
+                super().put({"source_path": "filler.txt"}, block=False)
+                controls.stop_event.set()
+                return task
+
+        task_queue = RefillAfterGetQueue(maxsize=1)
+        task_queue.put({"source_path": "claimed.txt"})
+
+        class Handler:
+            def process(self, task, heartbeat=None, worker_name=None):
+                processed.append(task)
+
+        scheduler = Scheduler(
+            task_queue,
+            Handler(),
+            workers=1,
+            stage_name="check",
+            controls=controls,
+        )
+
+        scheduler.start()
+        self.assertTrue(wait_until(lambda: controls.stop_requested()))
+
+        stop_thread = threading.Thread(target=scheduler.stop, daemon=True)
+        stop_thread.start()
+        stop_thread.join(timeout=0.5)
+
+        self.assertFalse(stop_thread.is_alive())
+        self.assertEqual(processed, [])
+        self.assertEqual(task_queue.unfinished_tasks, task_queue.qsize())
+
+    def test_scheduler_resume_dispatches_claimed_task_when_pause_slot_is_refilled(self):
+        processed = []
+        controls = TaskControls()
+
+        class PauseAndRefillAfterGetQueue(queue.Queue):
+            def get(self, *args, **kwargs):
+                task = super().get(*args, **kwargs)
+                super().put({"source_path": "filler.txt"}, block=False)
+                controls.pause_event.set()
+                return task
+
+        task_queue = PauseAndRefillAfterGetQueue(maxsize=1)
+        claimed_task = {"source_path": "claimed.txt"}
+        task_queue.put(claimed_task)
+
+        class Handler:
+            def process(self, task, heartbeat=None, worker_name=None):
+                processed.append(task)
+
+        scheduler = Scheduler(
+            task_queue,
+            Handler(),
+            workers=1,
+            stage_name="check",
+            controls=controls,
+        )
+
+        scheduler.start()
+        self.assertTrue(wait_until(lambda: controls.pause_requested()))
+        time.sleep(0.2)
+        self.assertEqual(processed, [])
+
+        controls.pause_event.clear()
+        self.assertTrue(wait_until(lambda: processed == [claimed_task]))
+        scheduler.stop()
+
+        self.assertEqual(processed, [claimed_task])
+        self.assertEqual(task_queue.qsize(), 1)
+        self.assertEqual(task_queue.unfinished_tasks, 1)
+
+    def test_scheduler_waits_while_paused_before_claiming_task(self):
+        processed = []
+        task_queue = queue.Queue()
+        task_queue.put({"source_path": "a.txt"})
+        controls = TaskControls()
+        controls.pause_event.set()
+
+        class Handler:
+            def process(self, task, heartbeat=None, worker_name=None):
+                processed.append(task)
+
+        scheduler = Scheduler(
+            task_queue,
+            Handler(),
+            workers=1,
+            stage_name="check",
+            controls=controls,
+        )
+
+        scheduler.start()
+        time.sleep(0.2)
+        self.assertEqual(processed, [])
+        self.assertEqual(task_queue.unfinished_tasks, 1)
+
+        controls.pause_event.clear()
+        self.assertTrue(wait_until(lambda: len(processed) == 1))
+        scheduler.stop()
+        self.assertEqual(processed, [{"source_path": "a.txt"}])
+
+    def test_scheduler_exits_when_stopped_before_claiming_task(self):
+        processed = []
+        task_queue = queue.Queue()
+        task_queue.put({"source_path": "a.txt"})
+        controls = TaskControls()
+        controls.stop_event.set()
+
+        class Handler:
+            def process(self, task, heartbeat=None, worker_name=None):
+                processed.append(task)
+
+        scheduler = Scheduler(
+            task_queue,
+            Handler(),
+            workers=1,
+            stage_name="check",
+            controls=controls,
+        )
+
+        scheduler.start()
+        time.sleep(0.2)
+        scheduler.stop()
+
+        self.assertEqual(processed, [])
+        self.assertEqual(task_queue.unfinished_tasks, 1)
+
+
+class ScannerControlsTests(unittest.TestCase):
+    def test_paused_local_scanner_does_not_enqueue_until_resumed(self):
+        controls = TaskControls()
+        controls.pause_event.set()
+        task_queue = queue.Queue()
+        progress = Progress()
+
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for index in range(3):
+                (root / f"file-{index}.txt").write_text("x", encoding="utf-8")
+
+            thread = threading.Thread(
+                target=scan_directory,
+                args=(str(root), task_queue, progress, None),
+                kwargs={"scan_workers": 1, "controls": controls},
+                daemon=True,
+            )
+            thread.start()
+            time.sleep(0.2)
+
+            self.assertEqual(task_queue.qsize(), 0)
+            self.assertEqual(progress.snapshot()["scan_active_workers"], 0)
+            self.assertTrue(thread.is_alive())
+
+            controls.pause_event.clear()
+            thread.join(timeout=1)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(task_queue.qsize(), 3)
+
+    def test_local_scanner_requeues_when_pause_arrives_after_claim(self):
+        controls = TaskControls()
+        task_queue = queue.Queue()
+        progress = Progress()
+
+        class PauseAfterGetQueue(queue.Queue):
+            paused_once = False
+
+            def get(self, *args, **kwargs):
+                item = super().get(*args, **kwargs)
+                if isinstance(item, tuple) and item[0] == "dir" and not self.paused_once:
+                    self.paused_once = True
+                    controls.pause_event.set()
+                return item
+
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "file.txt").write_text("x", encoding="utf-8")
+
+            with patch("core.scanner.queue.Queue", PauseAfterGetQueue):
+                thread = threading.Thread(
+                    target=scan_directory,
+                    args=(str(root), task_queue, progress, None),
+                    kwargs={"scan_workers": 1, "controls": controls},
+                    daemon=True,
+                )
+                thread.start()
+                self.assertTrue(wait_until(lambda: controls.pause_requested()))
+                time.sleep(0.2)
+
+                self.assertEqual(task_queue.qsize(), 0)
+                self.assertEqual(progress.snapshot()["scan_active_workers"], 0)
+                self.assertTrue(thread.is_alive())
+
+                controls.pause_event.clear()
+                thread.join(timeout=1)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(task_queue.qsize(), 1)
+
+    def test_paused_s3_scanner_does_not_enqueue_until_resumed(self):
+        controls = TaskControls()
+        controls.pause_event.set()
+        task_queue = queue.Queue()
+        progress = Progress()
+
+        class FakeClient:
+            def listObjects(self, bucket, delimiter="/", prefix="", marker=None, max_keys=1000):
+                return SimpleNamespace(
+                    status=200,
+                    body=SimpleNamespace(
+                        commonPrefixes=[],
+                        contents=[
+                            SimpleNamespace(key="root/a.txt", size=1, lastModified=None, etag="a"),
+                            SimpleNamespace(key="root/b.txt", size=1, lastModified=None, etag="b"),
+                        ],
+                        is_truncated=False,
+                        next_marker=None,
+                    ),
+                )
+
+        thread = threading.Thread(
+            target=scan_s3_sources,
+            args=(
+                [{"bucket": "bucket", "prefix": "root"}],
+                FakeClient(),
+                "bucket",
+                task_queue,
+                progress,
+            ),
+            kwargs={"scan_workers": 1, "controls": controls},
+            daemon=True,
+        )
+        thread.start()
+        time.sleep(0.2)
+
+        self.assertEqual(task_queue.qsize(), 0)
+        self.assertEqual(progress.snapshot()["scan_active_workers"], 0)
+        self.assertTrue(thread.is_alive())
+
+        controls.pause_event.clear()
+        thread.join(timeout=1)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(task_queue.qsize(), 2)
+
+    def test_s3_scanner_does_not_claim_next_prefix_while_paused(self):
+        controls = TaskControls()
+        task_queue = queue.Queue()
+        progress = Progress()
+
+        class PauseAfterChildPrefixQueue(queue.Queue):
+            def put(self, item, *args, **kwargs):
+                result = super().put(item, *args, **kwargs)
+                if item == "root/child/":
+                    controls.pause_event.set()
+                return result
+
+        class FakeClient:
+            def listObjects(self, bucket, delimiter="/", prefix="", marker=None, max_keys=1000):
+                if prefix == "root":
+                    return SimpleNamespace(
+                        status=200,
+                        body=SimpleNamespace(
+                            commonPrefixes=[SimpleNamespace(prefix="root/child/")],
+                            contents=[],
+                            is_truncated=False,
+                            next_marker=None,
+                        ),
+                    )
+                return SimpleNamespace(
+                    status=200,
+                    body=SimpleNamespace(
+                        commonPrefixes=[],
+                        contents=[SimpleNamespace(key="root/child/a.txt", size=1, lastModified=None, etag="a")],
+                        is_truncated=False,
+                        next_marker=None,
+                    ),
+                )
+
+        with patch.object(s3_scanner_module.queue, "Queue", PauseAfterChildPrefixQueue):
+            thread = threading.Thread(
+                target=scan_s3_sources,
+                args=(
+                    [{"bucket": "bucket", "prefix": "root"}],
+                    FakeClient(),
+                    "bucket",
+                    task_queue,
+                    progress,
+                ),
+                kwargs={"scan_workers": 1, "controls": controls},
+                daemon=True,
+            )
+            thread.start()
+            self.assertTrue(wait_until(lambda: controls.pause_requested()))
+            time.sleep(0.2)
+
+            self.assertEqual(task_queue.qsize(), 0)
+            self.assertEqual(progress.snapshot()["scan_active_workers"], 0)
+            self.assertTrue(thread.is_alive())
+
+            controls.pause_event.clear()
+            thread.join(timeout=1)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(task_queue.qsize(), 1)
+
+    def test_s3_scanner_requeues_when_pause_arrives_after_claim(self):
+        controls = TaskControls()
+        task_queue = queue.Queue()
+        progress = Progress()
+
+        class PauseAfterGetQueue(queue.Queue):
+            paused_once = False
+
+            def get(self, *args, **kwargs):
+                prefix = super().get(*args, **kwargs)
+                if prefix == "root" and not self.paused_once:
+                    self.paused_once = True
+                    controls.pause_event.set()
+                return prefix
+
+        class FakeClient:
+            def listObjects(self, bucket, delimiter="/", prefix="", marker=None, max_keys=1000):
+                return SimpleNamespace(
+                    status=200,
+                    body=SimpleNamespace(
+                        commonPrefixes=[],
+                        contents=[SimpleNamespace(key="root/a.txt", size=1, lastModified=None, etag="a")],
+                        is_truncated=False,
+                        next_marker=None,
+                    ),
+                )
+
+        with patch.object(s3_scanner_module.queue, "Queue", PauseAfterGetQueue):
+            thread = threading.Thread(
+                target=scan_s3_sources,
+                args=(
+                    [{"bucket": "bucket", "prefix": "root"}],
+                    FakeClient(),
+                    "bucket",
+                    task_queue,
+                    progress,
+                ),
+                kwargs={"scan_workers": 1, "controls": controls},
+                daemon=True,
+            )
+            thread.start()
+            self.assertTrue(wait_until(lambda: controls.pause_requested()))
+            time.sleep(0.2)
+
+            self.assertEqual(task_queue.qsize(), 0)
+            self.assertEqual(progress.snapshot()["scan_active_workers"], 0)
+            self.assertTrue(thread.is_alive())
+
+            controls.pause_event.clear()
+            thread.join(timeout=1)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(task_queue.qsize(), 1)
+
+    def test_local_scanner_stops_before_enqueueing_further_tasks(self):
+        controls = TaskControls()
+        task_queue = queue.Queue()
+
+        class StopAfterFirstPutQueue(queue.Queue):
+            def put(self, item, *args, **kwargs):
+                result = super().put(item, *args, **kwargs)
+                controls.stop_event.set()
+                return result
+
+        task_queue = StopAfterFirstPutQueue()
+        progress = Progress()
+
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for index in range(5):
+                (root / f"file-{index}.txt").write_text("x", encoding="utf-8")
+
+            scan_directory(
+                str(root),
+                task_queue,
+                progress,
+                checkpoint=None,
+                scan_workers=1,
+                controls=controls,
+            )
+
+        self.assertEqual(task_queue.qsize(), 1)
+
+    def test_local_scanner_exits_when_stopped_while_output_queue_full(self):
+        controls = TaskControls()
+        task_queue = queue.Queue(maxsize=1)
+        task_queue.put({"source_path": "prefill.txt"})
+        progress = Progress()
+
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "file.txt").write_text("x", encoding="utf-8")
+
+            thread = threading.Thread(
+                target=scan_directory,
+                args=(str(root), task_queue, progress, None),
+                kwargs={"scan_workers": 1, "controls": controls},
+                daemon=True,
+            )
+            thread.start()
+            time.sleep(0.2)
+            controls.stop_event.set()
+            thread.join(timeout=0.5)
+            exited_before_drain = not thread.is_alive()
+
+            if thread.is_alive():
+                task_queue.get_nowait()
+                task_queue.task_done()
+                thread.join(timeout=1)
+
+        self.assertTrue(exited_before_drain)
+
+    def test_s3_scanner_stops_before_enqueueing_further_tasks(self):
+        controls = TaskControls()
+
+        class StopAfterFirstPutQueue(queue.Queue):
+            def put(self, item, *args, **kwargs):
+                result = super().put(item, *args, **kwargs)
+                controls.stop_event.set()
+                return result
+
+        class FakeClient:
+            def listObjects(self, bucket, delimiter="/", prefix="", marker=None, max_keys=1000):
+                return SimpleNamespace(
+                    status=200,
+                    body=SimpleNamespace(
+                        commonPrefixes=[],
+                        contents=[
+                            SimpleNamespace(key="root/a.txt", size=1, lastModified=None, etag="a"),
+                            SimpleNamespace(key="root/b.txt", size=1, lastModified=None, etag="b"),
+                            SimpleNamespace(key="root/c.txt", size=1, lastModified=None, etag="c"),
+                        ],
+                        is_truncated=False,
+                        next_marker=None,
+                    ),
+                )
+
+        task_queue = StopAfterFirstPutQueue()
+
+        scan_s3_sources(
+            [{"bucket": "bucket", "prefix": "root"}],
+            FakeClient(),
+            "bucket",
+            task_queue,
+            Progress(),
+            scan_workers=1,
+            controls=controls,
+        )
+
+        self.assertEqual(task_queue.qsize(), 1)
+
+    def test_s3_scanner_exits_when_stopped_while_output_queue_full(self):
+        controls = TaskControls()
+        task_queue = queue.Queue(maxsize=1)
+        task_queue.put({"source_path": "prefill.txt"})
+
+        class FakeClient:
+            def listObjects(self, bucket, delimiter="/", prefix="", marker=None, max_keys=1000):
+                return SimpleNamespace(
+                    status=200,
+                    body=SimpleNamespace(
+                        commonPrefixes=[],
+                        contents=[SimpleNamespace(key="root/a.txt", size=1, lastModified=None, etag="a")],
+                        is_truncated=False,
+                        next_marker=None,
+                    ),
+                )
+
+        thread = threading.Thread(
+            target=scan_s3_sources,
+            args=(
+                [{"bucket": "bucket", "prefix": "root"}],
+                FakeClient(),
+                "bucket",
+                task_queue,
+                Progress(),
+            ),
+            kwargs={"scan_workers": 1, "controls": controls},
+            daemon=True,
+        )
+        thread.start()
+        time.sleep(0.2)
+        controls.stop_event.set()
+        thread.join(timeout=0.5)
+        exited_before_drain = not thread.is_alive()
+
+        if thread.is_alive():
+            task_queue.get_nowait()
+            task_queue.task_done()
+            thread.join(timeout=1)
+
+        self.assertTrue(exited_before_drain)
+
+
+if __name__ == "__main__":
+    unittest.main()
