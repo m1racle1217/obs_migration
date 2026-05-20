@@ -584,6 +584,12 @@ INDEX_HTML = r"""<!doctype html>
       border: 1px solid transparent;
     }
     .nav a:hover { background: rgba(96,165,250,.11); border-color: rgba(96,165,250,.22); }
+    .nav a.active {
+      background: linear-gradient(135deg, rgba(96,165,250,.2), rgba(37,99,235,.12));
+      border-color: rgba(147,197,253,.38);
+      color: var(--text);
+      box-shadow: inset 0 0 0 1px rgba(96,165,250,.08), 0 10px 30px rgba(37,99,235,.14);
+    }
     .main { padding: 30px 34px 92px; }
     .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
     .top h1 { font-size: 40px; letter-spacing: -.045em; line-height: 1.06; margin: 12px 0 0; }
@@ -691,7 +697,7 @@ INDEX_HTML = r"""<!doctype html>
         </div>
       </div>
 
-      <section id="dashboard" class="task-grid">
+      <section id="dashboard" class="task-grid" data-page="dashboard">
         <aside class="panel">
           <div class="toolbar">
             <button id="new-task-button" class="primary" type="button">新增任务</button>
@@ -718,7 +724,7 @@ INDEX_HTML = r"""<!doctype html>
         </section>
       </section>
 
-      <section id="task-editor" class="panel hidden">
+      <section id="task-editor" class="panel hidden" data-page="dashboard">
         <h2>新增任务配置</h2>
         <div class="split">
           <label>任务名 <input id="new-task-name" placeholder="例如：客户 A 迁移"></label>
@@ -729,7 +735,7 @@ INDEX_HTML = r"""<!doctype html>
         <button id="create-task" class="primary" type="button">保存到任务列表</button>
       </section>
 
-      <section id="config" class="panel">
+      <section id="config" class="panel" data-page="config">
         <h2>配置中心</h2>
         <div class="toolbar">
           <button id="reload-config" type="button">重新加载配置</button>
@@ -739,7 +745,7 @@ INDEX_HTML = r"""<!doctype html>
         <pre id="config-output">等待加载配置...</pre>
       </section>
 
-      <section id="browser" class="panel">
+      <section id="browser" class="panel" data-page="browser">
         <h2>目录浏览</h2>
         <div class="browser-window">
           <div class="toolbar">
@@ -772,7 +778,7 @@ INDEX_HTML = r"""<!doctype html>
         </div>
       </section>
 
-      <section id="logs" class="panel">
+      <section id="logs" class="panel" data-page="logs">
         <h2>日志 / 报告</h2>
         <p class="muted">迁移任务结束后，请在 logs、state 和 check_report 目录查看详细日志与报告。</p>
       </section>
@@ -784,6 +790,13 @@ INDEX_HTML = r"""<!doctype html>
     const AUTH_KEY = "obsWebConsole.authenticated";
     const statusText = document.getElementById("status-text");
     const authMessage = document.getElementById("auth-message");
+    const NAV_PAGES = new Set(["dashboard", "config", "browser", "logs"]);
+    const PAGE_TITLES = {
+      dashboard: "任务仪表盘",
+      config: "配置中心",
+      browser: "目录浏览",
+      logs: "日志 / 报告"
+    };
     const taskList = document.getElementById("task-list");
     const taskOutput = document.getElementById("task-output");
     const dashboardMetrics = document.getElementById("dashboard-metrics");
@@ -806,8 +819,29 @@ INDEX_HTML = r"""<!doctype html>
     function showApp() {
       document.getElementById("login-view").classList.add("hidden");
       document.getElementById("app-shell").classList.remove("hidden");
+      showPage();
     }
     function setStatus(message) { if (statusText) statusText.textContent = message; }
+    function currentPage() {
+      const page = (window.location.hash || "#dashboard").slice(1);
+      return NAV_PAGES.has(page) ? page : "dashboard";
+    }
+    function showPage(page = currentPage()) {
+      document.querySelectorAll("[data-page]").forEach(section => {
+        section.style.display = section.dataset.page === page ? "" : "none";
+      });
+      document.querySelectorAll(".nav a[href^='#']").forEach(link => {
+        const active = link.getAttribute("href") === "#" + page;
+        link.classList.toggle("active", active);
+        if (active) {
+          link.setAttribute("aria-current", "page");
+        } else {
+          link.removeAttribute("aria-current");
+        }
+      });
+      if (page !== "dashboard") document.getElementById("task-editor").classList.add("hidden");
+      setStatus((PAGE_TITLES[page] || "页面") + " 已打开");
+    }
     async function api(path, options) {
       const response = await fetch(path, Object.assign({ credentials: "same-origin" }, options || {}));
       let data = {};
@@ -1102,6 +1136,7 @@ INDEX_HTML = r"""<!doctype html>
     document.getElementById("browser-forward").addEventListener("click", () => { const loc = browserForward.pop(); if (loc) { browserHistory.push(loc); restoreBrowserLocation(loc); } });
     document.getElementById("browser-add-list").addEventListener("click", () => addSelectedToList().catch(error => browserOutput.textContent = error.message));
     document.getElementById("browser-fill-task").addEventListener("click", fillSelectedTaskConfig);
+    window.addEventListener("hashchange", () => showPage());
     if (localStorage.getItem(AUTH_KEY)) {
       bootApp().catch(() => showLogin("登录已过期，请重新登录。"));
     } else {
