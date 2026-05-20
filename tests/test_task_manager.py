@@ -12,7 +12,7 @@ from core.scheduler import Scheduler
 from core.scanner import scan_directory
 import core.s3_scanner as s3_scanner_module
 from core.s3_scanner import scan_s3_sources
-from core.task_manager import TaskControls, TaskManager
+from core.task_manager import MultiTaskManager, TaskControls, TaskManager
 
 
 def wait_until(predicate, timeout=1.5):
@@ -130,7 +130,165 @@ class TaskManagerTests(unittest.TestCase):
         self.assertIn("boom", snapshot["error"])
 
 
+class MultiTaskManagerTests(unittest.TestCase):
+    def test_creates_multiple_independent_tasks_and_runs_them_in_parallel(self):
+        releases = {}
+        started = {}
+
+        def runner(cfg, controls):
+            task_name = cfg.get("TEST", "name")
+            started[task_name].set()
+            controls.update_status(progress={"files_done": int(cfg.get("TEST", "done"))})
+            releases[task_name].wait(timeout=2)
+
+        manager = MultiTaskManager(runner)
+        self.addCleanup(lambda: manager.stop_all())
+
+        cfg_a = make_test_config("a", done=1)
+        cfg_b = make_test_config("b", done=2)
+        releases["a"] = threading.Event()
+        releases["b"] = threading.Event()
+        started["a"] = threading.Event()
+        started["b"] = threading.Event()
+
+        task_a = manager.create_task(cfg_a, name="Task A")
+        task_b = manager.create_task(cfg_b, name="Task B")
+
+        self.assertNotEqual(task_a, task_b)
+        self.assertTrue(manager.start(task_a))
+        self.assertTrue(manager.start(task_b))
+        self.assertTrue(started["a"].wait(timeout=1))
+        self.assertTrue(started["b"].wait(timeout=1))
+
+        tasks = manager.list_tasks()
+        self.assertEqual({task["task_id"] for task in tasks}, {task_a, task_b})
+        self.assertEqual(manager.snapshot(task_a)["state"], "running")
+        self.assertEqual(manager.snapshot(task_b)["state"], "running")
+        self.assertEqual(manager.snapshot(task_a)["progress"], {"files_done": 1})
+        self.assertEqual(manager.snapshot(task_b)["progress"], {"files_done": 2})
+
+        releases["a"].set()
+        releases["b"].set()
+        self.assertTrue(manager.join(task_a, timeout=1))
+        self.assertTrue(manager.join(task_b, timeout=1))
+
+    def test_controls_only_target_task(self):
+        release = threading.Event()
+        started = threading.Event()
+
+        def runner(_cfg, controls):
+            started.set()
+            while not controls.stop_requested():
+                controls.wait_if_paused(poll_interval=0.01)
+                time.sleep(0.01)
+            release.set()
+
+        manager = MultiTaskManager(runner)
+        self.addCleanup(lambda: manager.stop_all())
+        task_a = manager.create_task(make_test_config("a"), name="Task A")
+        task_b = manager.create_task(make_test_config("b"), name="Task B")
+
+        self.assertTrue(manager.start(task_a))
+        self.assertTrue(started.wait(timeout=1))
+        self.assertTrue(manager.pause(task_a))
+
+        self.assertEqual(manager.snapshot(task_a)["state"], "paused")
+        self.assertEqual(manager.snapshot(task_b)["state"], "idle")
+
+        self.assertTrue(manager.stop(task_a))
+        self.assertTrue(release.wait(timeout=1))
+        self.assertTrue(manager.join(task_a, timeout=1))
+
+    def test_updates_concurrency_in_task_config_and_controls(self):
+        manager = MultiTaskManager(lambda _cfg, _controls: None)
+        task_id = manager.create_task(make_test_config("a"), name="Task A")
+
+        snapshot = manager.update_concurrency(
+            task_id,
+            {
+                "upload_workers": 9,
+                "check_workers": 4,
+                "scan_workers": 3,
+                "multipart_concurrency": 2,
+                "max_connections": 80,
+            },
+        )
+
+        self.assertEqual(snapshot["concurrency"]["upload_workers"], 9)
+        self.assertEqual(snapshot["concurrency"]["check_workers"], 4)
+        self.assertEqual(snapshot["concurrency"]["scan_workers"], 3)
+        self.assertEqual(snapshot["concurrency"]["multipart_concurrency"], 2)
+        self.assertEqual(snapshot["concurrency"]["max_connections"], 80)
+        cfg = manager.get_task_config(task_id)
+        self.assertEqual(cfg.get("UPLOAD", "workers"), "9")
+        self.assertEqual(cfg.get("UPLOAD", "checkers"), "4")
+        self.assertEqual(cfg.get("SCAN", "scan_workers"), "3")
+        self.assertEqual(cfg.get("UPLOAD", "multipart_concurrency"), "2")
+        self.assertEqual(cfg.get("UPLOAD", "max_connections"), "80")
+
+
+def make_test_config(name, done=0):
+    import configparser
+
+    cfg = configparser.ConfigParser()
+    cfg.add_section("TEST")
+    cfg.set("TEST", "name", name)
+    cfg.set("TEST", "done", str(done))
+    cfg.add_section("UPLOAD")
+    cfg.set("UPLOAD", "workers", "1")
+    cfg.set("UPLOAD", "checkers", "1")
+    cfg.set("UPLOAD", "multipart_concurrency", "1")
+    cfg.set("UPLOAD", "max_connections", "16")
+    cfg.add_section("SCAN")
+    cfg.set("SCAN", "scan_workers", "1")
+    return cfg
+
+
 class SchedulerControlsTests(unittest.TestCase):
+    def test_scheduler_resize_adds_workers_for_future_tasks(self):
+        processed = []
+        release = threading.Event()
+        task_queue = queue.Queue()
+        task_queue.put({"source_path": "a.txt"})
+        task_queue.put({"source_path": "b.txt"})
+
+        class Handler:
+            def process(self, task, heartbeat=None, worker_name=None):
+                processed.append(worker_name)
+                release.wait(timeout=1)
+
+        scheduler = Scheduler(task_queue, Handler(), workers=1, stage_name="upload")
+        scheduler.start()
+        self.assertTrue(wait_until(lambda: len(processed) == 1))
+
+        scheduler.resize(2)
+
+        self.assertTrue(wait_until(lambda: len(processed) == 2))
+        self.assertGreaterEqual(len(set(processed)), 2)
+        release.set()
+        scheduler.stop()
+
+    def test_scheduler_resize_down_exits_extra_worker_after_current_task(self):
+        processed = []
+        release = threading.Event()
+        task_queue = queue.Queue()
+        task_queue.put({"source_path": "a.txt"})
+        task_queue.put({"source_path": "b.txt"})
+
+        class Handler:
+            def process(self, task, heartbeat=None, worker_name=None):
+                processed.append(worker_name)
+                release.wait(timeout=1)
+
+        scheduler = Scheduler(task_queue, Handler(), workers=2, stage_name="upload")
+        scheduler.start()
+        self.assertTrue(wait_until(lambda: len(processed) == 2))
+
+        scheduler.resize(1)
+        release.set()
+        self.assertTrue(wait_until(lambda: len([thread for thread in scheduler.threads if thread.is_alive()]) <= 1))
+        scheduler.stop()
+
     def test_scheduler_balances_claimed_task_when_stop_arrives_before_dispatch(self):
         processed = []
         controls = TaskControls()

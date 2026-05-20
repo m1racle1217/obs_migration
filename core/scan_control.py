@@ -15,11 +15,12 @@ class AdaptiveScanController:
     # ================================
     # 初始化扫描控制器
     # ================================
-    def __init__(self, task_queue, max_workers, min_workers=1, sample_interval=0.5):
+    def __init__(self, task_queue, max_workers, min_workers=1, sample_interval=0.5, controls=None):
         self.task_queue = task_queue
         self.max_workers = max(1, int(max_workers or 1))
         self.min_workers = max(1, min(self.max_workers, int(min_workers or 1)))
         self.sample_interval = max(0.0, float(sample_interval or 0.0))
+        self.controls = controls
 
         self._desired_workers = self.max_workers
         self._granted_slots = 0
@@ -87,6 +88,7 @@ class AdaptiveScanController:
     # 刷新控制状态
     # ================================
     def _refresh_unlocked(self, force=False):
+        self._sync_target_from_controls_unlocked()
         now = time.time()
         if not force and self.sample_interval > 0 and (now - self._last_refresh) < self.sample_interval:
             return
@@ -117,3 +119,22 @@ class AdaptiveScanController:
         span = self.max_workers - self.min_workers
         desired = self.min_workers + int(round((1.0 - fill_ratio) * span))
         return max(self.min_workers, min(self.max_workers, desired))
+
+    def set_max_workers(self, max_workers):
+        with self._condition:
+            self.max_workers = max(1, int(max_workers or 1))
+            self.min_workers = min(self.min_workers, self.max_workers)
+            self._desired_workers = min(self._desired_workers, self.max_workers)
+            self._condition.notify_all()
+
+    def _sync_target_from_controls_unlocked(self):
+        if self.controls is None or not hasattr(self.controls, "get_concurrency"):
+            return
+        target = self.controls.get_concurrency().get("scan_workers")
+        if not target:
+            return
+        target = max(1, int(target))
+        if target != self.max_workers:
+            self.max_workers = target
+            self.min_workers = min(self.min_workers, self.max_workers)
+            self._desired_workers = min(self._desired_workers, self.max_workers)

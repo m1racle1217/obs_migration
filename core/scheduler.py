@@ -37,6 +37,7 @@ class Scheduler:
         self.active_workers = 0
         self.running = True
         self.worker_states = {}
+        self._next_worker_index = 0
 
     # ================================
     # 启动工作线程
@@ -45,21 +46,44 @@ class Scheduler:
         logging.info("[SCHEDULER] start stage=%s workers=%s", self.stage_name, self.workers)
 
         for index in range(self.workers):
-            thread = threading.Thread(
-                target=self._worker,
-                name=f"{self.stage_name.capitalize()}-{index:02d}",
-                daemon=True,
-            )
-            thread.start()
-            self.threads.append(thread)
+            self._start_worker(index)
+        self._next_worker_index = self.workers
+
+    def resize(self, workers):
+        next_workers = max(1, int(workers or 1))
+        with self.lock:
+            previous = self.workers
+            self.workers = next_workers
+            start_index = self._next_worker_index
+            if next_workers > previous:
+                new_indexes = list(range(start_index, start_index + (next_workers - previous)))
+                self._next_worker_index += len(new_indexes)
+            else:
+                new_indexes = []
+
+        for index in new_indexes:
+            self._start_worker(index)
+        logging.info("[SCHEDULER] resize stage=%s workers=%s", self.stage_name, next_workers)
+
+    def _start_worker(self, index):
+        thread = threading.Thread(
+            target=self._worker,
+            args=(index,),
+            name=f"{self.stage_name.capitalize()}-{index:02d}",
+            daemon=True,
+        )
+        thread.start()
+        self.threads.append(thread)
 
     # ================================
     # 工作线程主循环
     # ================================
-    def _worker(self):
+    def _worker(self, worker_index):
         worker_name = threading.current_thread().name
 
         while True:
+            if not self._worker_index_allowed(worker_index):
+                break
             if not self._wait_until_claim_allowed():
                 break
 
@@ -88,10 +112,15 @@ class Scheduler:
 
                 self.task_queue.task_done()
 
+    def _worker_index_allowed(self, worker_index):
+        with self.lock:
+            return self.running and worker_index < self.workers
+
     # ================================
     # 绛夊緟鎺у埗淇″彿鍏佽棰嗗彇浠诲姟
     # ================================
     def _wait_until_claim_allowed(self):
+        self._sync_target_workers_from_controls()
         if self.controls is None:
             return self.running
 
@@ -106,6 +135,16 @@ class Scheduler:
             )
 
         return False
+
+    def _sync_target_workers_from_controls(self):
+        if self.controls is None or not hasattr(self.controls, "get_concurrency"):
+            return
+        key = "upload_workers" if self.stage_name == "upload" else "check_workers" if self.stage_name == "check" else None
+        if key is None:
+            return
+        target = self.controls.get_concurrency().get(key)
+        if target and int(target) != self.workers:
+            self.resize(target)
 
     # ================================
     # 棰嗗彇鍚庡啀娆℃牎楠屾槸鍚﹀厑璁稿垎鍙?
@@ -185,7 +224,8 @@ class Scheduler:
     def stop(self):
         self.running = False
         for thread in self.threads:
-            thread.join()
+            if thread is not threading.current_thread():
+                thread.join()
 
     # ================================
     # 获取活跃线程数

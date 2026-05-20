@@ -399,6 +399,729 @@ INDEX_HTML = """<!doctype html>
 </html>
 """
 
+INDEX_HTML = r"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OBS Migration 蓝色控制台</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #070b14;
+      --panel: rgba(12, 22, 40, .82);
+      --panel-strong: rgba(18, 32, 56, .92);
+      --line: rgba(96, 165, 250, .24);
+      --line-strong: rgba(147, 197, 253, .42);
+      --text: #f8fbff;
+      --soft: #dbeafe;
+      --muted: #9fb3cc;
+      --primary: #60a5fa;
+      --primary-strong: #bfdbfe;
+      --cyan: #67e8f9;
+      --danger: #fb7185;
+      --radius: 18px;
+      --font: Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      background:
+        radial-gradient(circle at 16% 6%, rgba(96, 165, 250, .2), transparent 29%),
+        radial-gradient(circle at 62% -10%, rgba(37, 99, 235, .34), transparent 38%),
+        radial-gradient(circle at 92% 18%, rgba(129, 140, 248, .14), transparent 25%),
+        linear-gradient(180deg, #0b1324 0%, #050814 100%);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 14px;
+      overflow-x: hidden;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: .34;
+      background-image:
+        linear-gradient(rgba(96, 165, 250, .15) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(96, 165, 250, .15) 1px, transparent 1px);
+      background-size: 44px 44px;
+      mask-image: linear-gradient(to bottom, #000 0, #000 60%, transparent 92%);
+    }
+    body::after {
+      content: "";
+      position: fixed;
+      left: -20%;
+      right: -20%;
+      top: 31%;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(96,165,250,.82), rgba(103,232,249,.58), transparent);
+      box-shadow: 0 0 24px rgba(96,165,250,.58);
+      pointer-events: none;
+    }
+    button, input, select, textarea { font: inherit; }
+    button {
+      min-height: 42px;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      padding: 0 16px;
+      font-weight: 760;
+      cursor: pointer;
+      color: var(--text);
+      background: rgba(96, 165, 250, .1);
+      border-color: var(--line);
+    }
+    button.primary {
+      background: linear-gradient(135deg, #eff6ff, #93c5fd 60%, #60a5fa);
+      color: #06111f;
+      box-shadow: 0 12px 34px rgba(96,165,250,.28);
+    }
+    button.danger {
+      background: rgba(251, 113, 133, .14);
+      border-color: rgba(251, 113, 133, .42);
+      color: #ffe4e9;
+    }
+    button:disabled { opacity: .48; cursor: not-allowed; }
+    input, select, textarea {
+      width: 100%;
+      min-height: 44px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      padding: 11px 13px;
+      background: rgba(3, 8, 20, .58);
+      color: var(--text);
+      outline: none;
+    }
+    textarea { min-height: 92px; resize: vertical; }
+    input:focus, select:focus, textarea:focus {
+      border-color: rgba(147,197,253,.9);
+      box-shadow: 0 0 0 3px rgba(96,165,250,.2);
+    }
+    label { display: grid; gap: 8px; color: var(--soft); font-weight: 700; }
+    .hidden { display: none !important; }
+    .login-view { min-height: 100dvh; display: grid; place-items: center; padding: 42px; position: relative; }
+    .login-card {
+      width: min(1080px, 100%);
+      display: grid;
+      grid-template-columns: 1.08fr .92fr;
+      border: 1px solid var(--line);
+      border-radius: 30px;
+      background: linear-gradient(135deg, rgba(15,28,52,.88), rgba(6,12,26,.8));
+      box-shadow: 0 30px 96px rgba(2,6,23,.46);
+      overflow: hidden;
+      backdrop-filter: blur(24px);
+    }
+    .login-hero, .login-form { padding: 56px; }
+    .login-hero { border-right: 1px solid var(--line); min-height: 580px; display: flex; flex-direction: column; justify-content: space-between; }
+    .mark {
+      width: 48px;
+      height: 48px;
+      border: 1px solid var(--line-strong);
+      border-radius: 15px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(145deg, rgba(96,165,250,.16), rgba(37,99,235,.12));
+      color: var(--primary-strong);
+      font-weight: 900;
+    }
+    .eyebrow { color: var(--cyan); font-size: 12px; font-weight: 850; letter-spacing: .12em; text-transform: uppercase; }
+    .login-hero h1 { font-size: clamp(38px, 5vw, 54px); line-height: 1.04; letter-spacing: -.047em; margin: 16px 0 18px; }
+    .muted { color: var(--muted); line-height: 1.75; }
+    .signal { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .fact, .panel, .task-card, .metric-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(180deg, rgba(18,32,56,.82), rgba(7,15,31,.78));
+      box-shadow: 0 24px 80px rgba(2,6,23,.28);
+      position: relative;
+      overflow: hidden;
+    }
+    .fact::before, .panel::before, .task-card::before, .metric-card::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--primary), var(--cyan), transparent);
+      opacity: .72;
+    }
+    .fact { padding: 15px; }
+    .fact span, .metric-card span { display: block; color: var(--muted); font-size: 12px; }
+    .fact strong, .metric-card strong { display: block; margin-top: 8px; font-size: 24px; letter-spacing: -.035em; }
+    .login-form { display: flex; flex-direction: column; justify-content: center; gap: 18px; }
+    .login-form h2 { font-size: 29px; letter-spacing: -.035em; margin: 0; }
+    .app-shell { min-height: 100dvh; display: grid; grid-template-columns: 282px minmax(0, 1fr); position: relative; }
+    .sidebar {
+      height: 100dvh;
+      position: sticky;
+      top: 0;
+      padding: 20px 16px;
+      border-right: 1px solid var(--line);
+      background: rgba(6,13,28,.78);
+      backdrop-filter: blur(20px);
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .brand { display: flex; gap: 12px; align-items: center; }
+    .brand strong, .brand small { display: block; }
+    .brand small { color: var(--muted); margin-top: 3px; }
+    .nav { display: grid; gap: 6px; }
+    .nav a {
+      min-height: 42px;
+      border-radius: 12px;
+      padding: 11px 12px;
+      color: var(--soft);
+      text-decoration: none;
+      font-weight: 700;
+      border: 1px solid transparent;
+    }
+    .nav a:hover { background: rgba(96,165,250,.11); border-color: rgba(96,165,250,.22); }
+    .main { padding: 30px 34px 92px; }
+    .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
+    .top h1 { font-size: 40px; letter-spacing: -.045em; line-height: 1.06; margin: 12px 0 0; }
+    .actions, .toolbar { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+    .status-pill {
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      border: 1px solid rgba(147,197,253,.4);
+      background: rgba(37,99,235,.18);
+      color: var(--primary-strong);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .task-grid { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 14px; align-items: start; }
+    .task-list { display: grid; gap: 10px; }
+    .task-card { padding: 15px; cursor: pointer; }
+    .task-card.selected { border-color: var(--primary-strong); box-shadow: 0 0 0 2px rgba(96,165,250,.18); }
+    .task-card h3 { margin: 0 0 8px; }
+    .progress-line { height: 9px; border-radius: 999px; background: rgba(96,165,250,.14); overflow: hidden; margin: 12px 0; }
+    .progress-line span { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--primary), var(--cyan)); }
+    .panel { padding: 18px; margin-bottom: 14px; }
+    .panel h2 { margin: 0 0 14px; font-size: 18px; letter-spacing: -.025em; }
+    .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+    .metric-card { padding: 16px; }
+    .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+    fieldset { border: 1px solid var(--line); border-radius: 16px; padding: 14px; }
+    legend { color: var(--primary-strong); font-weight: 800; }
+    pre, .code {
+      overflow: auto;
+      min-height: 100px;
+      border: 1px solid rgba(96,165,250,.2);
+      background: rgba(2,8,23,.76);
+      border-radius: 14px;
+      color: #e0f2fe;
+      padding: 14px;
+      font-family: ui-monospace, Consolas, monospace;
+      white-space: pre-wrap;
+    }
+    .browser-window { display: grid; gap: 12px; }
+    .browser-table { width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 14px; }
+    .browser-table th, .browser-table td { padding: 10px 12px; border-bottom: 1px solid rgba(96,165,250,.12); text-align: left; }
+    .browser-table tr { cursor: pointer; }
+    .browser-table tr:hover, .browser-table tr.selected { background: rgba(96,165,250,.12); }
+    .worker-list { display: grid; gap: 8px; }
+    .worker-item { border: 1px solid var(--line); border-radius: 12px; padding: 10px; color: var(--soft); background: rgba(96,165,250,.07); }
+    .status-bar {
+      position: fixed;
+      left: 282px;
+      right: 0;
+      bottom: 0;
+      border-top: 1px solid var(--line);
+      background: rgba(6,13,28,.88);
+      backdrop-filter: blur(18px);
+      padding: 14px 34px;
+      display: flex;
+      justify-content: space-between;
+      color: var(--muted);
+    }
+    @media (max-width: 980px) {
+      .login-card, .app-shell, .task-grid, .split { grid-template-columns: 1fr; }
+      .login-hero { min-height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+      .sidebar { position: relative; height: auto; }
+      .status-bar { position: static; }
+    }
+  </style>
+</head>
+<body>
+  <section id="login-view" class="login-view">
+    <div class="login-card">
+      <div class="login-hero">
+        <div>
+          <div class="mark">OBS</div>
+          <p class="eyebrow">SECURE BLUE CONTROL NODE</p>
+          <h1>先验身份，再启动迁移核心。</h1>
+          <p class="muted">Web 控制台默认只进入待命态。配置、浏览、状态轮询都可用，迁移任务必须由你手动点击启动。</p>
+        </div>
+        <div class="signal">
+          <div class="fact"><span>任务状态</span><strong>Idle</strong></div>
+          <div class="fact"><span>会话有效期</span><strong>12h</strong></div>
+          <div class="fact"><span>控制面</span><strong>Local</strong></div>
+        </div>
+      </div>
+      <div class="login-form">
+        <span class="status-pill">Web UI Gateway</span>
+        <h2>登录 OBS Migration 控制台</h2>
+        <p id="auth-message" class="muted">登录成功后会在本机记住身份；注销会清除本地标记并回到登录页。</p>
+        <label>用户名 <input id="login-username" autocomplete="username" value="admin"></label>
+        <label>密码 <input id="login-password" type="password" autocomplete="current-password"></label>
+        <button id="login-button" class="primary" type="button">登录并进入控制台</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="app-shell" class="app-shell hidden">
+    <aside class="sidebar">
+      <div class="brand"><div class="mark">OBS</div><div><strong>OBS Migration</strong><small>Blue Operations Node</small></div></div>
+      <nav class="nav" aria-label="主导航">
+        <a href="#dashboard">任务仪表盘</a>
+        <a href="#config">配置中心</a>
+        <a href="#browser">目录浏览</a>
+        <a href="#logs">日志 / 报告</a>
+      </nav>
+      <p class="muted">控制台已启动，但迁移核心保持待命。点击“启动任务”才会领取迁移任务。</p>
+    </aside>
+    <main class="main">
+      <div class="top">
+        <div>
+          <span class="status-pill">Standby · idle</span>
+          <h1>并行多任务控制台</h1>
+          <p class="muted">暗蓝科技风控制面：新增任务、独立启动、独立暂停、运行中调并发。</p>
+        </div>
+        <div class="actions">
+          <button id="refresh-tasks" type="button">刷新状态</button>
+          <button id="logout-button" class="danger" type="button">退出登录</button>
+        </div>
+      </div>
+
+      <section id="dashboard" class="task-grid">
+        <aside class="panel">
+          <div class="toolbar">
+            <button id="new-task-button" class="primary" type="button">新增任务</button>
+            <button id="start-selected-task" class="primary" type="button">启动任务</button>
+            <button id="pause-selected-task" type="button">暂停</button>
+            <button id="resume-selected-task" type="button">继续</button>
+            <button id="stop-selected-task" class="danger" type="button">停止</button>
+          </div>
+          <div id="task-list" class="task-list" aria-label="任务列表"></div>
+        </aside>
+        <section class="panel">
+          <h2>任务仪表盘</h2>
+          <div class="metric-grid" id="dashboard-metrics"></div>
+          <h2>活跃 Worker</h2>
+          <div id="worker-list" class="worker-list"></div>
+          <pre id="task-output">等待任务状态...</pre>
+          <div class="split">
+            <label>上传线程 <input id="concurrency-upload" type="number" min="1" value="32"></label>
+            <label>检查线程 <input id="concurrency-check" type="number" min="1" value="16"></label>
+            <label>扫描线程 <input id="concurrency-scan" type="number" min="1" value="4"></label>
+            <label>分片并发 <input id="concurrency-multipart" type="number" min="1" value="4"></label>
+          </div>
+          <button id="save-concurrency" type="button">应用并发设置</button>
+        </section>
+      </section>
+
+      <section id="task-editor" class="panel hidden">
+        <h2>新增任务配置</h2>
+        <div class="split">
+          <label>任务名 <input id="new-task-name" placeholder="例如：客户 A 迁移"></label>
+          <label>源路径/Prefix <input id="new-task-source" placeholder="可由目录浏览填入"></label>
+          <label>目标 Prefix <input id="new-task-target" placeholder="可选"></label>
+          <label>上传线程 <input id="new-task-upload-workers" type="number" min="1" value="32"></label>
+        </div>
+        <button id="create-task" class="primary" type="button">保存到任务列表</button>
+      </section>
+
+      <section id="config" class="panel">
+        <h2>配置中心</h2>
+        <div class="toolbar">
+          <button id="reload-config" type="button">重新加载配置</button>
+          <button id="save-config" class="primary" type="button">保存配置</button>
+        </div>
+        <form id="config-form" class="config-grid" aria-label="配置编辑器"></form>
+        <pre id="config-output">等待加载配置...</pre>
+      </section>
+
+      <section id="browser" class="panel">
+        <h2>目录浏览</h2>
+        <div class="browser-window">
+          <div class="toolbar">
+            <button id="browser-back" type="button">后退</button>
+            <button id="browser-forward" type="button">前进</button>
+            <button id="browser-up" type="button">上一级</button>
+            <button id="browser-refresh" type="button">刷新</button>
+          </div>
+          <div class="split">
+            <label>位置
+              <select id="browser-scope">
+                <option value="local">本地</option>
+                <option value="SOURCE">SOURCE 远端</option>
+                <option value="TARGET">TARGET 远端</option>
+              </select>
+            </label>
+            <label>路径 / Prefix <input id="browser-path" placeholder="D:\\data 或 root/prefix"></label>
+            <label>Bucket <input id="browser-bucket" placeholder="远端可填"></label>
+            <label>搜索过滤 <input id="browser-filter" placeholder="按名称过滤"></label>
+          </div>
+          <table id="browser-table" class="browser-table">
+            <thead><tr><th>名称</th><th>类型</th><th>大小</th><th>修改时间 / etag</th></tr></thead>
+            <tbody id="browser-body"></tbody>
+          </table>
+          <div class="toolbar">
+            <button id="browser-add-list" class="primary" type="button">加入迁移列表</button>
+            <button id="browser-fill-task" type="button">填入任务配置</button>
+          </div>
+          <pre id="browser-output">等待浏览...</pre>
+        </div>
+      </section>
+
+      <section id="logs" class="panel">
+        <h2>日志 / 报告</h2>
+        <p class="muted">迁移任务结束后，请在 logs、state 和 check_report 目录查看详细日志与报告。</p>
+      </section>
+    </main>
+    <div class="status-bar"><span id="status-text">Operations Shell 就绪</span><span>API /api/tasks · /api/task/status · /api/task/start · /api/task/pause · /api/task/resume · /api/task/stop</span></div>
+  </section>
+
+  <script>
+    const AUTH_KEY = "obsWebConsole.authenticated";
+    const statusText = document.getElementById("status-text");
+    const authMessage = document.getElementById("auth-message");
+    const taskList = document.getElementById("task-list");
+    const taskOutput = document.getElementById("task-output");
+    const dashboardMetrics = document.getElementById("dashboard-metrics");
+    const workerList = document.getElementById("worker-list");
+    const configForm = document.getElementById("config-form");
+    const configOutput = document.getElementById("config-output");
+    const browserOutput = document.getElementById("browser-output");
+    const browserBody = document.getElementById("browser-body");
+    let selectedTaskId = null;
+    let selectedBrowserItem = null;
+    let browserHistory = [];
+    let browserForward = [];
+
+    function showLogin(message) {
+      localStorage.removeItem(AUTH_KEY);
+      document.getElementById("login-view").classList.remove("hidden");
+      document.getElementById("app-shell").classList.add("hidden");
+      if (message) authMessage.textContent = message;
+    }
+    function showApp() {
+      document.getElementById("login-view").classList.add("hidden");
+      document.getElementById("app-shell").classList.remove("hidden");
+    }
+    function setStatus(message) { if (statusText) statusText.textContent = message; }
+    async function api(path, options) {
+      const response = await fetch(path, Object.assign({ credentials: "same-origin" }, options || {}));
+      let data = {};
+      try { data = await response.json(); } catch (_) { data = {}; }
+      if (response.status === 401) showLogin("登录已过期，请重新登录。");
+      if (!response.ok) {
+        const error = new Error(data.error || response.statusText || "request failed");
+        error.data = data;
+        throw error;
+      }
+      return data;
+    }
+    async function login() {
+      try {
+        await api("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: document.getElementById("login-username").value,
+            password: document.getElementById("login-password").value
+          })
+        });
+        localStorage.setItem(AUTH_KEY, "true");
+        showApp();
+        await bootApp();
+      } catch (error) {
+        authMessage.textContent = "登录失败：" + error.message;
+      }
+    }
+    async function logout() {
+      try { await api("/api/logout", { method: "POST" }); } catch (_) {}
+      showLogin("已注销，请重新登录。");
+    }
+    function pct(value) { return Math.max(0, Math.min(Number(value || 0), 100)); }
+    function bytes(value) {
+      let size = Math.max(Number(value || 0), 0);
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      for (const unit of units) {
+        if (size < 1024 || unit === units[units.length - 1]) return unit === "B" ? size.toFixed(0) + unit : size.toFixed(1) + unit;
+        size /= 1024;
+      }
+    }
+    function eta(seconds) {
+      if (seconds === null || seconds === undefined || seconds < 0) return "--:--:--";
+      seconds = Math.floor(seconds);
+      const h = String(Math.floor(seconds / 3600)).padStart(2, "0");
+      const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
+      const s = String(seconds % 60).padStart(2, "0");
+      return h + ":" + m + ":" + s;
+    }
+    async function loadTasks() {
+      const data = await api("/api/tasks");
+      renderTasks(data.tasks || []);
+      if (!selectedTaskId && data.tasks && data.tasks[0]) selectedTaskId = data.tasks[0].task_id;
+      if (selectedTaskId) await loadTask(selectedTaskId);
+    }
+    function renderTasks(tasks) {
+      taskList.innerHTML = "";
+      tasks.forEach(task => {
+        const percent = pct(task.dashboard && task.dashboard.percent);
+        const card = document.createElement("article");
+        card.className = "task-card" + (task.task_id === selectedTaskId ? " selected" : "");
+        card.innerHTML = `<h3>${task.name || task.task_id}</h3><p class="muted">${task.source || "未设置源"} → ${task.target || "未设置目标"}</p><div class="progress-line"><span style="width:${percent}%"></span></div><p>${task.state} · ${percent.toFixed(1)}% · 错误 ${(task.dashboard && task.dashboard.upload_errors) || 0}</p>`;
+        card.addEventListener("click", () => { selectedTaskId = task.task_id; loadTask(task.task_id); });
+        taskList.appendChild(card);
+      });
+    }
+    async function loadTask(taskId) {
+      const data = await api("/api/tasks/" + taskId);
+      renderTask(data.task);
+    }
+    function renderTask(task) {
+      const d = task.dashboard || {};
+      const metrics = [
+        ["总进度", pct(d.percent).toFixed(1) + "%"],
+        ["已处理大小", bytes(d.done_bytes) + " / " + bytes(d.total_bytes)],
+        ["ETA", eta(d.eta_seconds)],
+        ["完成文件", d.files_done || 0],
+        ["上传跳过", d.upload_skip || 0],
+        ["扫描跳过", d.scan_skip || 0],
+        ["索引状态", d.index_status || "unknown"],
+        ["扫描状态", d.scan_status || "unknown"],
+        ["检查状态", d.check_status || "unknown"],
+        ["上传状态", d.upload_status || "unknown"],
+        ["缓存命中", (d.cache_hit || 0) + "/" + (d.cache_total || 0)],
+        ["命中率", Number(d.hit_rate || 0).toFixed(1) + "%"],
+        ["扫描文件", d.scan_files || 0],
+        ["扫描速度", Number(d.scan_speed || 0).toFixed(1) + " 文件/s"],
+        ["扫描错误", d.scan_errors || 0],
+        ["上传错误", d.upload_errors || 0],
+        ["累计处理速度", bytes(d.process_speed) + "/s"],
+        ["实时上传速度", bytes(d.net_upload_speed) + "/s"],
+        ["检查队列", JSON.stringify(d.check_queue || {})],
+        ["传输队列", JSON.stringify(d.transfer_queue || {})],
+        ["检查线程", JSON.stringify(d.check_workers || {})],
+        ["上传线程", JSON.stringify(d.upload_workers || {})],
+        ["扫描线程", JSON.stringify(d.scan_workers || {})],
+      ];
+      dashboardMetrics.innerHTML = metrics.map(([k, v]) => `<div class="metric-card"><span>${k}</span><strong>${v}</strong></div>`).join("");
+      workerList.innerHTML = (d.active_workers || []).map(w => `<div class="worker-item">${w.stage || ""} ${w.worker_name || ""} ${w.detail || ""}<br>${w.task_summary || ""}</div>`).join("") || "<p class='muted'>暂无活跃 Worker</p>";
+      taskOutput.textContent = JSON.stringify(task, null, 2);
+      renderConcurrency(task.concurrency || {});
+      setStatus("任务状态已更新");
+    }
+    function renderConcurrency(concurrency) {
+      document.getElementById("concurrency-upload").value = concurrency.upload_workers || 32;
+      document.getElementById("concurrency-check").value = concurrency.check_workers || 16;
+      document.getElementById("concurrency-scan").value = concurrency.scan_workers || 4;
+      document.getElementById("concurrency-multipart").value = concurrency.multipart_concurrency || 4;
+    }
+    async function taskAction(action) {
+      if (!selectedTaskId) return;
+      const data = await api(`/api/tasks/${selectedTaskId}/${action}`, { method: "POST" });
+      renderTask(data.task || data.status);
+      await loadTasks();
+    }
+    async function saveConcurrency() {
+      if (!selectedTaskId) return;
+      const data = await api(`/api/tasks/${selectedTaskId}/concurrency`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          upload_workers: document.getElementById("concurrency-upload").value,
+          check_workers: document.getElementById("concurrency-check").value,
+          scan_workers: document.getElementById("concurrency-scan").value,
+          multipart_concurrency: document.getElementById("concurrency-multipart").value
+        })
+      });
+      renderTask(data.task);
+    }
+    async function createTask() {
+      const source = document.getElementById("new-task-source").value;
+      const target = document.getElementById("new-task-target").value;
+      const data = await api("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: document.getElementById("new-task-name").value || "迁移任务",
+          config: {
+            SOURCE: { path: { value: source }, prefix: { value: source } },
+            TARGET: { prefix: { value: target } }
+          },
+          concurrency: { upload_workers: document.getElementById("new-task-upload-workers").value }
+        })
+      });
+      selectedTaskId = data.task_id;
+      document.getElementById("task-editor").classList.add("hidden");
+      await loadTasks();
+    }
+    async function loadConfig() {
+      const data = await api("/api/config");
+      renderConfigEditor(data.config);
+      configOutput.textContent = JSON.stringify(data.config, null, 2);
+    }
+    function renderConfigEditor(config) {
+      configForm.innerHTML = "";
+      Object.entries(config || {}).forEach(([section, values]) => {
+        const fieldset = document.createElement("fieldset");
+        fieldset.dataset.section = section;
+        const legend = document.createElement("legend");
+        legend.textContent = section;
+        fieldset.appendChild(legend);
+        Object.entries(values || {}).forEach(([key, meta]) => {
+          const label = document.createElement("label");
+          label.textContent = section + "." + key;
+          const input = document.createElement("input");
+          input.name = "config-field";
+          input.dataset.section = section;
+          input.dataset.key = key;
+          input.value = meta && meta.value !== undefined ? meta.value : "";
+          label.appendChild(input);
+          fieldset.appendChild(label);
+        });
+        configForm.appendChild(fieldset);
+      });
+    }
+    function collectConfigPayload() {
+      const payload = {};
+      configForm.querySelectorAll('[name="config-field"]').forEach(input => {
+        payload[input.dataset.section] = payload[input.dataset.section] || {};
+        payload[input.dataset.section][input.dataset.key] = { value: input.value };
+      });
+      return payload;
+    }
+    async function saveConfig() {
+      const data = await api("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(collectConfigPayload())
+      });
+      configOutput.textContent = JSON.stringify(data, null, 2);
+      await loadConfig();
+    }
+    function browserLocation() {
+      return {
+        scope: document.getElementById("browser-scope").value,
+        path: document.getElementById("browser-path").value || ".",
+        bucket: document.getElementById("browser-bucket").value,
+        filter: document.getElementById("browser-filter").value
+      };
+    }
+    async function browse(pushHistory = true) {
+      const loc = browserLocation();
+      if (pushHistory) browserHistory.push(Object.assign({}, loc));
+      const params = new URLSearchParams({ page_size: "100", filter: loc.filter || "" });
+      let data;
+      if (loc.scope === "local") {
+        params.set("path", loc.path || ".");
+        data = await api("/api/browser/local?" + params.toString());
+      } else {
+        params.set("section", loc.scope);
+        params.set("bucket", loc.bucket || "");
+        params.set("prefix", loc.path || "");
+        data = await api("/api/browser/remote?" + params.toString());
+      }
+      renderBrowser(data.page);
+    }
+    function renderBrowser(page) {
+      selectedBrowserItem = null;
+      browserOutput.textContent = JSON.stringify(page, null, 2);
+      if (page.path !== undefined) document.getElementById("browser-path").value = page.path || "";
+      if (page.bucket !== undefined) document.getElementById("browser-bucket").value = page.bucket || "";
+      if (page.prefix !== undefined) document.getElementById("browser-path").value = page.prefix || "";
+      browserBody.innerHTML = "";
+      (page.items || []).forEach(item => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${item.name}</td><td>${item.kind}</td><td>${item.size || ""}</td><td>${item.etag || item.mtime || ""}</td>`;
+        tr.addEventListener("click", () => {
+          selectedBrowserItem = item;
+          browserBody.querySelectorAll("tr").forEach(row => row.classList.remove("selected"));
+          tr.classList.add("selected");
+        });
+        tr.addEventListener("dblclick", () => enterBrowserItem(item));
+        browserBody.appendChild(tr);
+      });
+    }
+    function enterBrowserItem(item) {
+      if (!item || item.kind === "file") return;
+      if (item.kind === "bucket") document.getElementById("browser-bucket").value = item.name;
+      document.getElementById("browser-path").value = item.path || item.name || "";
+      browserForward = [];
+      browse(true).catch(error => browserOutput.textContent = error.message);
+    }
+    function restoreBrowserLocation(loc) {
+      document.getElementById("browser-scope").value = loc.scope;
+      document.getElementById("browser-path").value = loc.path;
+      document.getElementById("browser-bucket").value = loc.bucket;
+      document.getElementById("browser-filter").value = loc.filter;
+      browse(false).catch(error => browserOutput.textContent = error.message);
+    }
+    function browserUp() {
+      const pathInput = document.getElementById("browser-path");
+      const text = pathInput.value.replace(/\\/g, "/").replace(/\/$/, "");
+      pathInput.value = text.includes("/") ? text.split("/").slice(0, -1).join("/") : "";
+      browse(true).catch(error => browserOutput.textContent = error.message);
+    }
+    async function addSelectedToList() {
+      if (!selectedBrowserItem) return;
+      const data = await api("/api/source-list", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: [selectedBrowserItem.path] })
+      });
+      browserOutput.textContent = JSON.stringify(data, null, 2);
+    }
+    function fillSelectedTaskConfig() {
+      if (!selectedBrowserItem) return;
+      document.getElementById("task-editor").classList.remove("hidden");
+      document.getElementById("new-task-source").value = selectedBrowserItem.path || selectedBrowserItem.name || "";
+    }
+    async function bootApp() {
+      showApp();
+      await Promise.all([loadTasks(), loadConfig()]);
+      browse(false).catch(() => {});
+      window.setInterval(() => loadTasks().catch(() => {}), 3000);
+    }
+    document.getElementById("login-button").addEventListener("click", login);
+    document.getElementById("logout-button").addEventListener("click", logout);
+    document.getElementById("refresh-tasks").addEventListener("click", () => loadTasks().catch(error => setStatus(error.message)));
+    document.getElementById("new-task-button").addEventListener("click", () => document.getElementById("task-editor").classList.toggle("hidden"));
+    document.getElementById("create-task").addEventListener("click", () => createTask().catch(error => setStatus(error.message)));
+    document.getElementById("start-selected-task").addEventListener("click", () => taskAction("start").catch(error => setStatus(error.message)));
+    document.getElementById("pause-selected-task").addEventListener("click", () => taskAction("pause").catch(error => setStatus(error.message)));
+    document.getElementById("resume-selected-task").addEventListener("click", () => taskAction("resume").catch(error => setStatus(error.message)));
+    document.getElementById("stop-selected-task").addEventListener("click", () => taskAction("stop").catch(error => setStatus(error.message)));
+    document.getElementById("save-concurrency").addEventListener("click", () => saveConcurrency().catch(error => setStatus(error.message)));
+    document.getElementById("reload-config").addEventListener("click", () => loadConfig().catch(error => configOutput.textContent = error.message));
+    document.getElementById("save-config").addEventListener("click", () => saveConfig().catch(error => configOutput.textContent = error.message));
+    document.getElementById("browser-refresh").addEventListener("click", () => browse(true).catch(error => browserOutput.textContent = error.message));
+    document.getElementById("browser-up").addEventListener("click", browserUp);
+    document.getElementById("browser-back").addEventListener("click", () => { if (browserHistory.length > 1) { browserForward.push(browserHistory.pop()); restoreBrowserLocation(browserHistory[browserHistory.length - 1]); } });
+    document.getElementById("browser-forward").addEventListener("click", () => { const loc = browserForward.pop(); if (loc) { browserHistory.push(loc); restoreBrowserLocation(loc); } });
+    document.getElementById("browser-add-list").addEventListener("click", () => addSelectedToList().catch(error => browserOutput.textContent = error.message));
+    document.getElementById("browser-fill-task").addEventListener("click", fillSelectedTaskConfig);
+    if (localStorage.getItem(AUTH_KEY)) {
+      bootApp().catch(() => showLogin("登录已过期，请重新登录。"));
+    } else {
+      showLogin();
+    }
+  </script>
+</body>
+</html>
+"""
+
 
 ACTIVE_TASK_STATES = {"starting", "running", "pausing", "paused", "stopping"}
 SESSION_TTL_SECONDS = 12 * 60 * 60
@@ -455,6 +1178,19 @@ class WebConsoleServer:
             self._thread.join(timeout=2)
 
     def _stop_task_manager(self):
+        stop_all = getattr(self.task_manager, "stop_all", None)
+        if callable(stop_all):
+            try:
+                stop_all()
+            except Exception:
+                LOGGER.exception("Failed to stop Web console tasks")
+            join_all = getattr(self.task_manager, "join_all", None)
+            if callable(join_all):
+                try:
+                    join_all(timeout=2)
+                except Exception:
+                    LOGGER.exception("Failed to join Web console tasks")
+            return
         stop = getattr(self.task_manager, "stop", None)
         if callable(stop):
             try:
@@ -487,6 +1223,9 @@ class WebConsoleServer:
             def do_POST(self):
                 server._handle(self)
 
+            def do_PATCH(self):
+                server._handle(self)
+
             def log_message(self, _format, *args):
                 return
 
@@ -499,17 +1238,31 @@ class WebConsoleServer:
             if request.command == "GET" and path in {"/", "/index.html"}:
                 self._send_html(request, INDEX_HTML)
                 return
-            if path.startswith("/api/") and request.command == "POST" and not self._is_same_origin_request(request):
+            if path.startswith("/api/") and request.command in {"POST", "PATCH"} and not self._is_same_origin_request(request):
                 self._send_json(request, {"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
                 return
             if request.command == "POST" and path == "/api/login":
                 self._handle_login(request)
                 return
+            if request.command == "POST" and path == "/api/logout":
+                self._handle_logout(request)
+                return
             if path.startswith("/api/") and not self._is_authorized(request):
                 self._send_json(request, {"ok": False, "error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
                 return
 
-            if request.command == "GET" and path == "/api/config":
+            task_route = self._match_task_route(path)
+            if request.command == "GET" and path == "/api/tasks":
+                self._handle_list_tasks(request)
+            elif request.command == "POST" and path == "/api/tasks":
+                self._handle_create_task(request)
+            elif task_route and request.command == "GET":
+                self._handle_get_task(request, task_route[0])
+            elif task_route and request.command == "PATCH" and task_route[1] == "concurrency":
+                self._handle_task_concurrency(request, task_route[0])
+            elif task_route and request.command == "POST":
+                self._handle_task_action(request, task_route[1], task_id=task_route[0])
+            elif request.command == "GET" and path == "/api/config":
                 self._send_json(request, {"ok": True, "config": self._config_payload()})
             elif request.command == "POST" and path == "/api/config":
                 self._handle_save_config(request)
@@ -552,6 +1305,16 @@ class WebConsoleServer:
             self._cleanup_sessions_locked(now)
             self.sessions[token] = now + self.session_ttl_seconds
         headers = {"Set-Cookie": f"obs_web_session={token}; HttpOnly; SameSite=Strict; Path=/"}
+        headers = {"Set-Cookie": f"obs_web_session={token}; Max-Age={self.session_ttl_seconds}; HttpOnly; SameSite=Strict; Path=/"}
+        self._send_json(request, {"ok": True, "expires_in": self.session_ttl_seconds}, headers=headers)
+
+    def _handle_logout(self, request):
+        cookie = SimpleCookie(request.headers.get("Cookie", ""))
+        session = cookie.get("obs_web_session")
+        if session is not None:
+            with self._sessions_lock:
+                self.sessions.pop(session.value, None)
+        headers = {"Set-Cookie": "obs_web_session=; Max-Age=0; HttpOnly; SameSite=Strict; Path=/"}
         self._send_json(request, {"ok": True}, headers=headers)
 
     def _handle_save_config(self, request):
@@ -566,15 +1329,59 @@ class WebConsoleServer:
         self.config_saver(cfg)
         self._send_json(request, {"ok": True, "changed": changed})
 
-    def _handle_task_action(self, request, action):
+    def _handle_list_tasks(self, request):
+        if hasattr(self.task_manager, "list_tasks"):
+            self._send_json(request, {"ok": True, "tasks": self.task_manager.list_tasks()})
+            return
+        self._send_json(request, {"ok": True, "tasks": [self.task_manager.snapshot()]})
+
+    def _handle_create_task(self, request):
+        if not hasattr(self.task_manager, "create_task"):
+            self._send_json(request, {"ok": False, "error": "multi task manager is unavailable"}, HTTPStatus.BAD_REQUEST)
+            return
+        payload = self._read_json(request)
+        cfg = _copy_config(self.config_loader())
+        _apply_task_config_overlay(cfg, payload.get("config", {}))
+        concurrency = payload.get("concurrency", {})
+        _apply_task_concurrency(cfg, concurrency)
+        task_id = self.task_manager.create_task(cfg, name=str(payload.get("name") or "迁移任务"))
+        if concurrency and hasattr(self.task_manager, "update_concurrency"):
+            self.task_manager.update_concurrency(task_id, concurrency)
+        self._send_json(request, {"ok": True, "task_id": task_id, "task": self.task_manager.snapshot(task_id)})
+
+    def _handle_get_task(self, request, task_id):
+        try:
+            self._send_json(request, {"ok": True, "task": self.task_manager.snapshot(task_id)})
+        except KeyError:
+            self._send_json(request, {"ok": False, "error": "task not found"}, HTTPStatus.NOT_FOUND)
+
+    def _handle_task_concurrency(self, request, task_id):
+        if not hasattr(self.task_manager, "update_concurrency"):
+            self._send_json(request, {"ok": False, "error": "concurrency update is unavailable"}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            task = self.task_manager.update_concurrency(task_id, self._read_json(request))
+        except KeyError:
+            self._send_json(request, {"ok": False, "error": "task not found"}, HTTPStatus.NOT_FOUND)
+            return
+        self._send_json(request, {"ok": True, "task": task})
+
+    def _handle_task_action(self, request, action, task_id=None):
         if action == "start":
-            result = self.task_manager.start(self.config_loader())
+            result = self.task_manager.start(task_id) if task_id else self.task_manager.start(self.config_loader())
         elif action in {"pause", "resume", "stop"}:
-            result = getattr(self.task_manager, action)()
+            try:
+                result = getattr(self.task_manager, action)(task_id) if task_id else getattr(self.task_manager, action)()
+            except TypeError:
+                result = getattr(self.task_manager, action)()
         else:
             self._send_json(request, {"ok": False, "error": "not found"}, HTTPStatus.NOT_FOUND)
             return
-        self._send_json(request, {"ok": True, "result": result, "status": self.task_manager.snapshot()})
+        try:
+            status = self.task_manager.snapshot(task_id) if task_id else self.task_manager.snapshot()
+        except TypeError:
+            status = self.task_manager.snapshot()
+        self._send_json(request, {"ok": True, "result": result, "status": status, "task": status})
 
     def _handle_local_browser(self, request, parsed):
         query = _query(parsed)
@@ -668,6 +1475,14 @@ class WebConsoleServer:
                     return self.obs_client_factory(section)
                 except TypeError:
                     return self.obs_client_factory()
+
+    def _match_task_route(self, path):
+        parts = [part for part in str(path or "").split("/") if part]
+        if len(parts) == 3 and parts[0] == "api" and parts[1] == "tasks":
+            return parts[2], ""
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "tasks":
+            return parts[2], parts[3]
+        return None
 
     def _is_authorized(self, request):
         cfg = self.config_loader()
@@ -800,3 +1615,42 @@ def _copy_config(cfg):
         for key, value in cfg[section].items():
             copied.set(section, key, value)
     return copied
+
+
+def _apply_task_config_overlay(cfg, payload):
+    if not isinstance(payload, dict):
+        raise ValueError("config must be an object")
+    for section, values in payload.items():
+        if not isinstance(values, dict):
+            raise ValueError("config section must be an object")
+        section = str(section)
+        if not cfg.has_section(section):
+            cfg.add_section(section)
+        for key, meta in values.items():
+            value = meta.get("value") if isinstance(meta, dict) else meta
+            cfg.set(section, str(key), str(value))
+
+
+def _apply_task_concurrency(cfg, concurrency):
+    if not concurrency:
+        return
+    if not isinstance(concurrency, dict):
+        raise ValueError("concurrency must be an object")
+    mapping = {
+        "upload_workers": ("UPLOAD", "workers"),
+        "check_workers": ("UPLOAD", "checkers"),
+        "scan_workers": ("SCAN", "scan_workers"),
+        "multipart_concurrency": ("UPLOAD", "multipart_concurrency"),
+        "max_connections": ("UPLOAD", "max_connections"),
+    }
+    for key, value in concurrency.items():
+        if key not in mapping:
+            continue
+        try:
+            clean = max(1, int(value))
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} must be an integer")
+        section, option = mapping[key]
+        if not cfg.has_section(section):
+            cfg.add_section(section)
+        cfg.set(section, option, str(clean))

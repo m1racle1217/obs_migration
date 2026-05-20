@@ -80,7 +80,7 @@ from core import (
     scan_s3_sources,
 )
 from core.obs_index import build_obs_index
-from core.task_manager import TaskManager
+from core.task_manager import MultiTaskManager as TaskManager
 from core.utils import build_object_uri, detect_storage_scheme, parse_size, sanitize_key, setup_logger
 from core.web_ui import WebConsoleServer
 
@@ -3272,6 +3272,7 @@ def run_migration(cfg, controls=None):
             check_queue,
             max_workers=scan_workers,
             min_workers=resolve_min_scan_workers(scan_workers),
+            controls=controls,
         )
 
     init_target(
@@ -3374,6 +3375,18 @@ def run_migration(cfg, controls=None):
             workers={
                 "check": checker_scheduler.get_status_snapshot(),
                 "upload": scheduler.get_status_snapshot(),
+            },
+            queues={
+                "check": {
+                    "current": check_queue.qsize(),
+                    "max": getattr(check_queue, "maxsize", 0),
+                    "unfinished": check_queue.unfinished_tasks,
+                },
+                "transfer": {
+                    "current": task_queue.qsize(),
+                    "max": getattr(task_queue, "maxsize", 0),
+                    "unfinished": task_queue.unfinished_tasks,
+                },
             },
         )
 
@@ -3648,7 +3661,10 @@ def _start_web_console(cfg, task_manager):
 def _shutdown_web_runtime(server, task_manager, join_timeout=5):
     if task_manager is not None:
         try:
-            task_manager.stop()
+            if hasattr(type(task_manager), "stop_all"):
+                task_manager.stop_all()
+            else:
+                task_manager.stop()
         except Exception as exc:
             print(f"⚠️ Web 任务停止失败: {exc}")
 
@@ -3658,7 +3674,12 @@ def _shutdown_web_runtime(server, task_manager, join_timeout=5):
         except Exception as exc:
             print(f"⚠️ Web 控制台关闭失败: {exc}")
 
-    if task_manager is not None and hasattr(task_manager, "join"):
+    if task_manager is not None and hasattr(type(task_manager), "join_all"):
+        try:
+            task_manager.join_all(timeout=join_timeout)
+        except Exception as exc:
+            print(f"⚠️ Web 任务等待结束失败: {exc}")
+    elif task_manager is not None and hasattr(task_manager, "join"):
         try:
             task_manager.join(timeout=join_timeout)
         except Exception as exc:

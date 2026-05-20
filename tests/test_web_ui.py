@@ -4,6 +4,7 @@ import io
 import json
 import os
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -13,6 +14,7 @@ from unittest import mock
 
 import obs_migrate
 from core.web_config import MASKED_SECRET
+from core.task_manager import MultiTaskManager
 from core.web_ui import WebConsoleServer
 
 
@@ -145,6 +147,8 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertIn("HttpOnly", headers["Set-Cookie"])
         self.assertIn("SameSite=Strict", headers["Set-Cookie"])
         self.assertIn("Path=/", headers["Set-Cookie"])
+        self.assertIn("Max-Age=43200", headers["Set-Cookie"])
+        self.assertEqual(data["expires_in"], 43200)
 
         status, data, _headers = client.request("GET", "/api/config")
         self.assertEqual(status, 200)
@@ -425,6 +429,116 @@ class WebConsoleServerTests(unittest.TestCase):
         with server._sessions_lock:
             self.assertNotIn(token, server.sessions)
 
+    def test_logout_clears_session_cookie_and_blocks_next_api_call(self):
+        server, client, _saved, _cfg = self.make_server()
+        status, _data, _headers = client.request(
+            "POST",
+            "/api/login",
+            {"username": "admin", "password": "secret"},
+        )
+        self.assertEqual(status, 200)
+        token = client.cookie.split("=", 1)[1]
+        with server._sessions_lock:
+            self.assertIn(token, server.sessions)
+
+        status, data, headers = client.request("POST", "/api/logout")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertIn("obs_web_session=", headers["Set-Cookie"])
+        self.assertIn("Max-Age=0", headers["Set-Cookie"])
+        with server._sessions_lock:
+            self.assertNotIn(token, server.sessions)
+
+        client.cookie = None
+        status, data, _headers = client.request("GET", "/api/config")
+        self.assertEqual(status, 401)
+        self.assertFalse(data["ok"])
+
+    def test_multi_task_api_creates_starts_and_controls_independent_tasks(self):
+        releases = {}
+        started = {}
+
+        def runner(cfg, controls):
+            task_name = cfg.get("WEB_TASK", "name")
+            started[task_name].set()
+            controls.update_status(
+                progress={
+                    "done_bytes": int(cfg.get("WEB_TASK", "done_bytes")),
+                    "total_bytes": 100,
+                    "files_done": int(cfg.get("WEB_TASK", "files_done")),
+                    "scan_files": int(cfg.get("WEB_TASK", "files_done")),
+                },
+                pipeline={"scan": "running", "check": "running", "index": "n/a"},
+                workers={"upload": {"active_workers": 1, "workers": []}},
+                queues={"transfer": {"current": 0, "max": 10}},
+            )
+            releases[task_name].wait(timeout=2)
+
+        manager = MultiTaskManager(runner)
+        _server, client, _saved, _cfg = self.make_server(task_manager=manager)
+        client.request("POST", "/api/login", {"username": "admin", "password": "secret"})
+
+        for name, done_bytes, files_done in (("a", 20, 1), ("b", 40, 2)):
+            releases[name] = threading.Event()
+            started[name] = threading.Event()
+            status, data, _headers = client.request(
+                "POST",
+                "/api/tasks",
+                {
+                    "name": f"Task {name.upper()}",
+                    "config": {
+                        "WEB_TASK": {
+                            "name": {"value": name},
+                            "done_bytes": {"value": str(done_bytes)},
+                            "files_done": {"value": str(files_done)},
+                        }
+                    },
+                    "concurrency": {"upload_workers": 3, "check_workers": 2, "scan_workers": 1},
+                },
+            )
+            self.assertEqual(status, 200)
+            self.assertTrue(data["ok"])
+            self.assertIn("task_id", data)
+
+        status, data, _headers = client.request("GET", "/api/tasks")
+        self.assertEqual(status, 200)
+        task_ids = [task["task_id"] for task in data["tasks"]]
+        self.assertEqual(len(task_ids), 2)
+
+        for task_id in task_ids:
+            status, data, _headers = client.request("POST", f"/api/tasks/{task_id}/start")
+            self.assertEqual(status, 200)
+            self.assertTrue(data["ok"])
+
+        self.assertTrue(started["a"].wait(timeout=1))
+        self.assertTrue(started["b"].wait(timeout=1))
+
+        status, data, _headers = client.request("GET", f"/api/tasks/{task_ids[0]}")
+        self.assertEqual(status, 200)
+        self.assertIn(data["task"]["state"], {"starting", "running"})
+        for field in ("percent", "eta_seconds", "process_speed", "net_upload_speed", "hit_rate"):
+            self.assertIn(field, data["task"]["dashboard"])
+
+        status, data, _headers = client.request(
+            "PATCH",
+            f"/api/tasks/{task_ids[0]}/concurrency",
+            {"upload_workers": 7, "check_workers": 4, "scan_workers": 2, "multipart_concurrency": 3},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(data["task"]["concurrency"]["upload_workers"], 7)
+
+        status, data, _headers = client.request("POST", f"/api/tasks/{task_ids[0]}/pause")
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["task"]["state"], "paused")
+        status, data, _headers = client.request("GET", f"/api/tasks/{task_ids[1]}")
+        self.assertEqual(status, 200)
+        self.assertIn(data["task"]["state"], {"starting", "running"})
+
+        releases["a"].set()
+        releases["b"].set()
+
     def test_remote_browser_lists_buckets_and_prefix(self):
         class FakeClient:
             def listBuckets(self):
@@ -475,9 +589,26 @@ class WebConsoleServerTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertIn("text/html", headers["Content-Type"])
-        for label in ("配置", "目录浏览", "任务仪表盘", "日志/报告"):
+        for label in (
+            "配置中心",
+            "目录浏览",
+            "任务仪表盘",
+            "日志 / 报告",
+            "登录 OBS Migration 控制台",
+            "新增任务",
+            "退出登录",
+            "启动任务",
+            "后退",
+            "前进",
+            "上一级",
+            "加入迁移列表",
+            "填入任务配置",
+            "实时上传速度",
+            "活跃 Worker",
+        ):
             self.assertIn(label, html)
         for endpoint in (
+            "/api/tasks",
             "/api/task/status",
             "/api/task/start",
             "/api/task/pause",
@@ -488,7 +619,16 @@ class WebConsoleServerTests(unittest.TestCase):
         for marker in (
             'id="config-form"',
             'id="save-config"',
+            'id="login-view"',
+            'id="app-shell"',
+            'id="logout-button"',
+            'id="task-list"',
+            'id="browser-table"',
             'name="config-field"',
+            'obsWebConsole.authenticated',
+            'localStorage.setItem',
+            'localStorage.removeItem',
+            'api("/api/logout"',
             'api("/api/config", {',
             'method: "POST"',
         ):
