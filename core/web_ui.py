@@ -442,6 +442,7 @@ INDEX_HTML = r"""<!doctype html>
       content: "";
       position: fixed;
       inset: 0;
+      z-index: -2;
       pointer-events: none;
       opacity: .34;
       background-image:
@@ -457,6 +458,7 @@ INDEX_HTML = r"""<!doctype html>
       right: -20%;
       top: 31%;
       height: 1px;
+      z-index: -1;
       background: linear-gradient(90deg, transparent, rgba(96,165,250,.82), rgba(103,232,249,.58), transparent);
       box-shadow: 0 0 24px rgba(96,165,250,.58);
       pointer-events: none;
@@ -501,20 +503,19 @@ INDEX_HTML = r"""<!doctype html>
     }
     label { display: grid; gap: 8px; color: var(--soft); font-weight: 700; }
     .hidden { display: none !important; }
-    .login-view { min-height: 100dvh; display: grid; place-items: center; padding: 42px; position: relative; }
+    .login-view { min-height: 100dvh; display: grid; place-items: center; padding: 28px; position: relative; }
     .login-card {
-      width: min(1080px, 100%);
-      display: grid;
-      grid-template-columns: 1.08fr .92fr;
+      width: min(390px, calc(100vw - 32px));
+      display: block;
       border: 1px solid var(--line);
-      border-radius: 30px;
-      background: linear-gradient(135deg, rgba(15,28,52,.88), rgba(6,12,26,.8));
-      box-shadow: 0 30px 96px rgba(2,6,23,.46);
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(18,32,56,.9), rgba(6,12,26,.88));
+      box-shadow: 0 20px 64px rgba(2,6,23,.4);
       overflow: hidden;
       backdrop-filter: blur(24px);
     }
     .login-hero, .login-form { padding: 56px; }
-    .login-hero { border-right: 1px solid var(--line); min-height: 580px; display: flex; flex-direction: column; justify-content: space-between; }
+    .login-hero { display: none; }
     .mark {
       width: 48px;
       height: 48px;
@@ -551,8 +552,11 @@ INDEX_HTML = r"""<!doctype html>
     .fact { padding: 15px; }
     .fact span, .metric-card span { display: block; color: var(--muted); font-size: 12px; }
     .fact strong, .metric-card strong { display: block; margin-top: 8px; font-size: 24px; letter-spacing: -.035em; }
-    .login-form { display: flex; flex-direction: column; justify-content: center; gap: 18px; }
-    .login-form h2 { font-size: 29px; letter-spacing: -.035em; margin: 0; }
+    .login-form { display: flex; flex-direction: column; justify-content: center; gap: 16px; padding: 34px; }
+    .login-form .status-pill { display: none; }
+    .login-form h2 { font-size: 26px; letter-spacing: -.035em; margin: 0 0 6px; text-align: center; }
+    .login-form .muted { margin: -4px 0 2px; text-align: center; }
+    .login-form .muted:empty { display: none; }
     .app-shell { min-height: 100dvh; display: grid; grid-template-columns: 282px minmax(0, 1fr); position: relative; }
     .sidebar {
       height: 100dvh;
@@ -653,26 +657,12 @@ INDEX_HTML = r"""<!doctype html>
 <body>
   <section id="login-view" class="login-view">
     <div class="login-card">
-      <div class="login-hero">
-        <div>
-          <div class="mark">OBS</div>
-          <p class="eyebrow">SECURE BLUE CONTROL NODE</p>
-          <h1>先验身份，再启动迁移核心。</h1>
-          <p class="muted">Web 控制台默认只进入待命态。配置、浏览、状态轮询都可用，迁移任务必须由你手动点击启动。</p>
-        </div>
-        <div class="signal">
-          <div class="fact"><span>任务状态</span><strong>Idle</strong></div>
-          <div class="fact"><span>会话有效期</span><strong>12h</strong></div>
-          <div class="fact"><span>控制面</span><strong>Local</strong></div>
-        </div>
-      </div>
       <div class="login-form">
-        <span class="status-pill">Web UI Gateway</span>
-        <h2>登录 OBS Migration 控制台</h2>
-        <p id="auth-message" class="muted">登录成功后会在本机记住身份；注销会清除本地标记并回到登录页。</p>
+        <h2>登录</h2>
+        <p id="auth-message" class="muted"></p>
         <label>用户名 <input id="login-username" autocomplete="username" value="admin"></label>
         <label>密码 <input id="login-password" type="password" autocomplete="current-password"></label>
-        <button id="login-button" class="primary" type="button">登录并进入控制台</button>
+        <button id="login-button" class="primary" type="button">登录</button>
       </div>
     </div>
   </section>

@@ -594,7 +594,7 @@ class WebConsoleServerTests(unittest.TestCase):
             "目录浏览",
             "任务仪表盘",
             "日志 / 报告",
-            "登录 OBS Migration 控制台",
+            "<h2>登录</h2>",
             "新增任务",
             "退出登录",
             "启动任务",
