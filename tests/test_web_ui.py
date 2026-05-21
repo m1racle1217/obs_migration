@@ -804,11 +804,6 @@ class WebConsoleServerTests(unittest.TestCase):
             "前进",
             "上一级",
             "转到",
-            "加入迁移列表",
-            "迁移到当前目录",
-            "请先在文件列表中单击选择",
-            "已加入迁移列表",
-            "填入任务配置",
             "实时上传速度",
             "活跃 Worker",
         ):
@@ -903,7 +898,6 @@ class WebConsoleServerTests(unittest.TestCase):
             'class="browser-check"',
             'selectedBrowserItems',
             'function checkedBrowserPaths',
-            'id="browser-set-target"',
             'id="browser-mode-note"',
             'id="browser-profile-select"',
             'id="browser-profile-empty"',
@@ -939,7 +933,6 @@ class WebConsoleServerTests(unittest.TestCase):
             'function showPage',
             'function renderBreadcrumbs',
             'function browserKindLabel',
-            'function setTargetDirectoryFromBrowser',
             'window.addEventListener("hashchange"',
             'api("/api/logout"',
             'api("/api/config", {',
@@ -1033,16 +1026,29 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertIn(".file-icon.bucket::before", html)
         command_button_block = html.split(".explorer-commandbar button {", 1)[1].split("}", 1)[0]
         self.assertIn("background:", command_button_block)
-        self.assertIn("rgba(var(--button-rgb), .045)", command_button_block)
+        self.assertIn("rgba(255,255,255,.018)", command_button_block)
+        self.assertNotIn("rgba(var(--button-rgb), .045)", command_button_block)
         titlebar_block = html.split('<div class="explorer-titlebar">', 1)[1].split('<div class="explorer-commandbar">', 1)[0]
         self.assertNotIn('id="browser-add-list"', titlebar_block)
         self.assertNotIn('id="browser-set-target"', titlebar_block)
         self.assertNotIn('id="browser-fill-task"', titlebar_block)
         footer_block = html.split('<div class="explorer-footer">', 1)[1].split('</div>', 1)[0]
         self.assertIn('id="browser-selection-actions"', footer_block)
-        self.assertIn('id="browser-add-list"', footer_block)
+        self.assertIn('id="browser-save-profile"', footer_block)
+        self.assertNotIn('id="browser-add-list"', html)
+        self.assertNotIn('id="browser-set-target"', html)
+        self.assertNotIn('id="browser-fill-task"', html)
+        self.assertNotIn("function addSelectedToList", html)
+        self.assertNotIn("function fillSelectedTaskConfig", html)
+        self.assertNotIn("function setTargetDirectoryFromBrowser", html)
+        nav_link_block = html.split(".nav a {", 1)[1].split("}", 1)[0]
+        self.assertIn("background-clip: padding-box", nav_link_block)
         nav_hover_block = html.split(".nav a:hover {", 1)[1].split("}", 1)[0]
         self.assertNotIn("inset 0 1px 0", nav_hover_block)
+        self.assertNotIn("var(--hover-art)", nav_hover_block)
+        self.assertNotIn("rgba(191,219,254", nav_hover_block)
+        nav_active_block = html.split(".nav a.active {", 1)[1].split("}", 1)[0]
+        self.assertNotIn("rgba(255,255,255,.16)", nav_active_block)
         self.assertIn("const detailRows = isLocalProfile", html)
         self.assertIn("<dt>本地路径</dt>", html)
         self.assertIn("<dt>Bucket</dt>", html)

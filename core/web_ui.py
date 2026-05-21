@@ -532,9 +532,6 @@ INDEX_HTML = r"""<!doctype html>
     [data-task-filter="completed"] { --button-rgb: 52, 211, 153; --button-rgb-2: 45, 212, 191; }
     [data-task-filter="failed"] { --button-rgb: 251, 113, 133; --button-rgb-2: 244, 63, 94; }
     [data-task-filter="unstarted"] { --button-rgb: 148, 163, 184; --button-rgb-2: 96, 165, 250; }
-    #browser-add-list { --button-rgb: 59, 130, 246; --button-rgb-2: 45, 212, 191; }
-    #browser-set-target { --button-rgb: 52, 211, 153; --button-rgb-2: 34, 197, 94; }
-    #browser-fill-task { --button-rgb: 139, 92, 246; --button-rgb-2: 217, 70, 239; }
     #browser-back { --button-rgb: 99, 102, 241; --button-rgb-2: 59, 130, 246; }
     #browser-forward { --button-rgb: 14, 165, 233; --button-rgb-2: 45, 212, 191; }
     #browser-up { --button-rgb: 245, 158, 11; --button-rgb-2: 251, 191, 36; }
@@ -742,18 +739,17 @@ INDEX_HTML = r"""<!doctype html>
       text-decoration: none;
       font-weight: 640;
       border: 1px solid transparent;
+      background-clip: padding-box;
     }
     .nav a:hover {
       color: #f8fbff;
-      border-color: rgba(191,219,254,.28);
-      background:
-        var(--hover-art) center / cover,
-        #20242c;
-      box-shadow: 0 16px 42px rgba(37,99,235,.16);
+      border-color: rgba(96,165,250,.11);
+      background: rgba(255,255,255,.045);
+      box-shadow: 0 10px 28px rgba(0,0,0,.18);
     }
     .nav a.active {
       background: linear-gradient(135deg, rgba(96,165,250,.22), rgba(181,140,255,.12));
-      border-color: rgba(255,255,255,.16);
+      border-color: rgba(96,165,250,.16);
       color: var(--text);
       box-shadow: 0 12px 36px rgba(37,99,235,.12);
     }
@@ -1072,11 +1068,9 @@ INDEX_HTML = r"""<!doctype html>
       border-radius: 9px;
       padding: 0 12px;
       font-weight: 750;
-      background:
-        linear-gradient(135deg, rgba(var(--button-rgb), .045), rgba(var(--button-rgb-2), .026)),
-        rgba(255,255,255,.018);
-      border-color: rgba(255,255,255,.06);
-      color: #cbd5e1;
+      background: rgba(255,255,255,.018);
+      border-color: rgba(255,255,255,.052);
+      color: #b9c4d4;
     }
     .explorer-addressbar { display: grid; grid-template-columns: auto minmax(180px, 1fr) minmax(120px, 210px) auto; }
     .explorer-addressbar input, .explorer-commandbar input, .explorer-commandbar select { min-height: 44px; border-radius: 9px; }
@@ -1529,7 +1523,6 @@ INDEX_HTML = r"""<!doctype html>
                 <option value="">选择位置预设后浏览</option>
               </select>
             </label>
-            <button id="browser-save-profile" type="button">加入位置预设</button>
             <input id="browser-filter" class="explorer-search" placeholder="搜索当前文件夹">
           </div>
           <div class="explorer-addressbar">
@@ -1556,10 +1549,8 @@ INDEX_HTML = r"""<!doctype html>
           <div class="explorer-footer">
             <span id="browser-status">等待浏览...</span>
             <span id="browser-selected">未选择项目</span>
-            <div id="browser-selection-actions" class="explorer-selection-actions hidden">
-              <button id="browser-add-list" class="primary hidden" type="button">加入迁移列表</button>
-              <button id="browser-set-target" class="primary hidden" type="button">迁移到当前目录</button>
-              <button id="browser-fill-task" type="button" class="hidden">填入任务配置</button>
+            <div id="browser-selection-actions" class="explorer-selection-actions">
+              <button id="browser-save-profile" type="button">加入位置预设</button>
             </div>
           </div>
         </div>
@@ -1640,7 +1631,7 @@ INDEX_HTML = r"""<!doctype html>
       "UPLOAD.max_connections": "对象存储客户端最大连接数上限；并行任务总压测不足时先调这里。",
       "SCAN.scan_workers": "全局扫描线程上限；任务级扫描并发不能超过它。",
       "CHECK.enabled": "是否启用迁移前/迁移后的校验逻辑。",
-      "PATH.migration_list_file": "迁移列表文件路径；目录浏览加入迁移列表会写入这里。",
+      "PATH.migration_list_file": "迁移列表文件路径；任务需要批量源路径时会读取这里。",
       "WEB_UI.enabled": "是否通过配置默认启动 Web 控制台；CLI 默认行为仍不变。",
       "WEB_UI.host": "Web 监听地址；非本机地址时必须开启登录。",
       "WEB_UI.port": "Web 控制台端口。",
@@ -2798,20 +2789,7 @@ INDEX_HTML = r"""<!doctype html>
       const profile = selectedBrowserProfile();
       browserTitle.textContent = "位置预设浏览";
       browserContext.textContent = profile ? `正在浏览位置预设：${profile.name || profile.id}` : "选择位置预设后浏览其中的目录或对象。";
-      browserModeNote.textContent = sourceMode ? "当前预设可作为源端迁移入口：勾选目录或对象后加入迁移列表，也可以填入新任务源路径。" : "当前预设可作为目标落点：进入目标目录后，点击“迁移到当前目录”写入新任务目标。";
-      updateBrowserActionVisibility();
-    }
-    function updateBrowserActionVisibility() {
-      const actions = document.getElementById("browser-selection-actions");
-      const sourceMode = browserMode !== "target";
-      const hasProfile = Boolean(selectedBrowserProfile());
-      const hasSelection = selectedBrowserItems.size > 0 || Boolean(selectedBrowserItem);
-      const showSourceActions = sourceMode && hasSelection;
-      const showTargetActions = !sourceMode && hasProfile;
-      document.getElementById("browser-add-list").classList.toggle("hidden", !showSourceActions);
-      document.getElementById("browser-fill-task").classList.toggle("hidden", !showSourceActions);
-      document.getElementById("browser-set-target").classList.toggle("hidden", !showTargetActions);
-      if (actions) actions.classList.toggle("hidden", !(showSourceActions || showTargetActions));
+      browserModeNote.textContent = sourceMode ? "当前预设可作为源端迁移入口：可勾选目录或对象辅助确认范围；需要复用当前位置时点击“加入位置预设”。" : "当前预设可作为目标落点：进入目标目录后，可点击“加入位置预设”保存为常用目标位置。";
     }
     function renderBreadcrumbs(page) {
       const scope = document.getElementById("browser-scope").value;
@@ -2832,7 +2810,6 @@ INDEX_HTML = r"""<!doctype html>
       if (page.bucket !== undefined) document.getElementById("browser-bucket").value = page.bucket || "";
       if (page.prefix !== undefined) document.getElementById("browser-path").value = page.prefix || "";
       browserSelected.textContent = browserMode === "target" ? "当前目标目录：" + (currentBrowserDirectory() || "未设置") : "未选择项目";
-      updateBrowserActionVisibility();
       renderBreadcrumbs(page);
       browserBody.innerHTML = "";
       const items = (page.items || []).slice().sort((left, right) => {
@@ -2862,7 +2839,6 @@ INDEX_HTML = r"""<!doctype html>
           browserBody.querySelectorAll("tr").forEach(row => row.classList.remove("selected"));
           tr.classList.add("selected");
           browserSelected.textContent = browserMode === "target" ? `已选择：${item.name || ""}；目标落点仍以当前目录为准` : `已选择：${item.name || ""}`;
-          updateBrowserActionVisibility();
         });
         tr.addEventListener("dblclick", () => enterBrowserItem(item));
         browserBody.appendChild(tr);
@@ -2880,7 +2856,6 @@ INDEX_HTML = r"""<!doctype html>
       } else {
         browserSelected.textContent = browserMode === "target" ? "当前目标目录：" + (currentBrowserDirectory() || "未设置") : "未选择项目";
       }
-      updateBrowserActionVisibility();
     }
     function enterBrowserItem(item) {
       if (!item || item.kind === "file") return;
@@ -2902,36 +2877,6 @@ INDEX_HTML = r"""<!doctype html>
       pathInput.value = text.includes("/") ? text.split("/").slice(0, -1).join("/") : "";
       browse(true).catch(error => browserOutput.textContent = error.message);
     }
-    async function addSelectedToList() {
-      if (browserMode === "target") {
-        setTargetDirectoryFromBrowser();
-        return;
-      }
-      const checkedPaths = checkedBrowserPaths();
-      if (!checkedPaths.length && !selectedBrowserItem) {
-        const message = "请先在文件列表中单击选择一个目录或对象。";
-        browserSelected.textContent = message;
-        browserOutput.textContent = message;
-        setStatus(message);
-        return;
-      }
-      const selectedPaths = checkedPaths.length ? checkedPaths : [selectedBrowserItem.path || selectedBrowserItem.name || ""].filter(Boolean);
-      if (!selectedPaths.length) {
-        const message = "选中项目缺少可加入迁移列表的路径。";
-        browserSelected.textContent = message;
-        browserOutput.textContent = message;
-        setStatus(message);
-        return;
-      }
-      const data = await api("/api/source-list", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: selectedPaths })
-      });
-      browserSelected.textContent = "已加入迁移列表：" + selectedPaths.join(", ");
-      setStatus("已加入迁移列表");
-      browserOutput.textContent = JSON.stringify(data, null, 2);
-    }
     function currentBrowserDirectory() {
       const scope = document.getElementById("browser-scope").value;
       const bucket = document.getElementById("browser-bucket").value || "";
@@ -2939,32 +2884,6 @@ INDEX_HTML = r"""<!doctype html>
       if (scope === "TARGET" && bucket && path) return bucket + "/" + path.replace(/^\/+/, "");
       if (scope === "TARGET") return path || bucket;
       return path;
-    }
-    function setTargetDirectoryFromBrowser() {
-      const targetPath = currentBrowserDirectory();
-      if (!targetPath) {
-        const message = "请先进入或填写一个目的端目录。";
-        browserSelected.textContent = message;
-        browserOutput.textContent = message;
-        setStatus(message);
-        return;
-      }
-      window.location.hash = "#dashboard";
-      showPage("dashboard");
-      document.getElementById("task-editor").classList.remove("hidden");
-      document.getElementById("task-editor").scrollIntoView({ behavior: "smooth", block: "start" });
-      document.getElementById("new-task-target").value = targetPath;
-      setStatus("迁移目标已设为：" + targetPath);
-    }
-    function fillSelectedTaskConfig() {
-      const checkedPaths = checkedBrowserPaths();
-      const sourcePath = checkedPaths[0] || (selectedBrowserItem && (selectedBrowserItem.path || selectedBrowserItem.name || ""));
-      if (!sourcePath) return;
-      window.location.hash = "#dashboard";
-      showPage("dashboard");
-      document.getElementById("task-editor").classList.remove("hidden");
-      document.getElementById("task-editor").scrollIntoView({ behavior: "smooth", block: "start" });
-      document.getElementById("new-task-source").value = sourcePath;
     }
     async function bootApp() {
       showApp();
@@ -3034,9 +2953,6 @@ INDEX_HTML = r"""<!doctype html>
     document.getElementById("browser-up").addEventListener("click", browserUp);
     document.getElementById("browser-back").addEventListener("click", () => { if (browserHistory.length > 1) { browserForward.push(browserHistory.pop()); restoreBrowserLocation(browserHistory[browserHistory.length - 1]); } });
     document.getElementById("browser-forward").addEventListener("click", () => { const loc = browserForward.pop(); if (loc) { browserHistory.push(loc); restoreBrowserLocation(loc); } });
-    document.getElementById("browser-add-list").addEventListener("click", () => addSelectedToList().catch(error => browserOutput.textContent = error.message));
-    document.getElementById("browser-set-target").addEventListener("click", setTargetDirectoryFromBrowser);
-    document.getElementById("browser-fill-task").addEventListener("click", fillSelectedTaskConfig);
     window.addEventListener("hashchange", () => showPage());
     if (localStorage.getItem(AUTH_KEY)) {
       bootApp().catch(() => showLogin("登录已过期，请重新登录。"));
