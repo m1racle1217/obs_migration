@@ -990,8 +990,10 @@ INDEX_HTML = r"""<!doctype html>
             <h2>新增任务配置</h2>
             <div class="split">
               <label>任务名 <input id="new-task-name" placeholder="例如：客户 A 迁移"></label>
-              <label>源路径/Prefix <input id="new-task-source" placeholder="可由目录浏览填入"></label>
-              <label>目标 Prefix <input id="new-task-target" placeholder="可选"></label>
+              <label>源存储位置 <select id="new-task-source-profile" aria-label="选择源存储位置"></select></label>
+              <label>目标存储位置 <select id="new-task-target-profile" aria-label="选择目标存储位置"></select></label>
+              <label>源路径 / Prefix <input id="new-task-source" placeholder="可手动填写，也可由存储位置或目录浏览填入"></label>
+              <label>目标 Prefix <input id="new-task-target" placeholder="可手动填写，也可由存储位置或目录浏览填入"></label>
               <label>上传线程 <input id="new-task-upload-workers" type="number" min="1" value="32"></label>
             </div>
             <button id="create-task" class="primary" type="button">保存到任务列表</button>
@@ -1537,21 +1539,58 @@ INDEX_HTML = r"""<!doctype html>
     async function createTask() {
       const source = document.getElementById("new-task-source").value;
       const target = document.getElementById("new-task-target").value;
+      const sourceProfile = selectedTaskProfile("source");
+      const targetProfile = selectedTaskProfile("target");
       const data = await api("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: document.getElementById("new-task-name").value || "迁移任务",
-          config: {
-            SOURCE: { path: { value: source }, prefix: { value: source } },
-            TARGET: { prefix: { value: target } }
-          },
+          config: taskConfigFromProfiles(sourceProfile, targetProfile, source, target),
           concurrency: { upload_workers: document.getElementById("new-task-upload-workers").value }
         })
       });
       selectedTaskId = data.task_id;
       document.getElementById("task-editor").classList.add("hidden");
       await loadTasks();
+    }
+    function selectedTaskProfile(role) {
+      const select = document.getElementById(role === "target" ? "new-task-target-profile" : "new-task-source-profile");
+      if (!select || !select.value) return null;
+      return browserProfiles.find(profile => profile.id === select.value) || null;
+    }
+    function taskConfigFromProfiles(sourceProfile, targetProfile, sourcePath, targetPath) {
+      return {
+        SOURCE: taskConfigSection(sourceProfile, sourcePath, true),
+        TARGET: taskConfigSection(targetProfile, targetPath, false)
+      };
+    }
+    function taskConfigSection(profile, pathValue, isSource) {
+      const section = {};
+      const fallbackPath = pathValue || "";
+      if (!profile) {
+        if (isSource) {
+          section.path = { value: fallbackPath };
+          section.prefix = { value: fallbackPath };
+        } else {
+          section.prefix = { value: fallbackPath };
+        }
+        return section;
+      }
+      const profileType = String(profile.type || "").toLowerCase();
+      const isLocal = profileType === "local";
+      section.type = { value: isLocal ? "local" : "s3" };
+      if (isLocal) {
+        section.path = { value: fallbackPath || profile.path || "" };
+        if (isSource) section.prefix = { value: "" };
+      } else {
+        ["endpoint", "bucket", "ak", "sk"].forEach(key => {
+          if (profile[key]) section[key] = { value: profile[key] };
+        });
+        section.prefix = { value: fallbackPath || profile.prefix || "" };
+        if (isSource) section.path = { value: "" };
+      }
+      return section;
     }
     async function loadConfig(message = "配置已加载。修改后点击“保存配置”即可生效。") {
       const data = await api("/api/config");
@@ -1729,6 +1768,26 @@ INDEX_HTML = r"""<!doctype html>
       const data = await api("/api/browser/profiles");
       browserProfiles = data.profiles || [];
       renderBrowserProfiles();
+      renderTaskProfileSelects();
+    }
+    function renderTaskProfileSelects() {
+      renderTaskProfileSelect("source", document.getElementById("new-task-source-profile"));
+      renderTaskProfileSelect("target", document.getElementById("new-task-target-profile"));
+    }
+    function renderTaskProfileSelect(role, select) {
+      if (!select) return;
+      const current = select.value;
+      const roleText = role === "target" ? "目标" : "源";
+      select.innerHTML = `<option value="">手动填写${roleText}路径 / Prefix</option>`;
+      browserProfiles
+        .filter(profile => profile.role === role || profile.role === "both" || (role === "source" && profile.section === "SOURCE") || (role === "target" && profile.section === "TARGET"))
+        .forEach(profile => {
+          const option = document.createElement("option");
+          option.value = profile.id;
+          option.textContent = formatBrowserProfileLabel(profile);
+          select.appendChild(option);
+        });
+      if (current && browserProfiles.some(profile => profile.id === current)) select.value = current;
     }
     function renderBrowserProfiles() {
       const select = document.getElementById("browser-profile-select");
@@ -1764,6 +1823,17 @@ INDEX_HTML = r"""<!doctype html>
       if (profile.path) return profile.path;
       return [profile.bucket, profile.prefix].filter(Boolean).join("/");
     }
+    function browserProfileTaskPath(profile) {
+      if (!profile) return "";
+      return profile.path || profile.prefix || "";
+    }
+    function applyTaskProfile(role, profileId) {
+      const profile = browserProfiles.find(item => item.id === profileId);
+      if (!profile) return;
+      const input = document.getElementById(role === "target" ? "new-task-target" : "new-task-source");
+      if (input) input.value = browserProfileTaskPath(profile);
+      setStatus(`${role === "target" ? "目标" : "源"}存储位置已选择：${profile.name || profile.id}`);
+    }
     function applyBrowserProfile(profileId) {
       const profile = browserProfiles.find(item => item.id === profileId);
       if (!profile) return;
@@ -1795,6 +1865,7 @@ INDEX_HTML = r"""<!doctype html>
       });
       browserProfiles = data.profiles || [];
       renderBrowserProfiles();
+      renderTaskProfileSelects();
       document.getElementById("browser-profile-select").value = profile.id;
       if (nameInput) nameInput.value = "";
       setStatus("存储位置已保存");
@@ -2005,9 +2076,12 @@ INDEX_HTML = r"""<!doctype html>
       const hidden = editor.classList.toggle("hidden");
       if (!hidden) {
         setStatus("新增任务配置已打开");
+        renderTaskProfileSelects();
         editor.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
     });
+    document.getElementById("new-task-source-profile").addEventListener("change", event => applyTaskProfile("source", event.target.value));
+    document.getElementById("new-task-target-profile").addEventListener("change", event => applyTaskProfile("target", event.target.value));
     document.getElementById("create-task").addEventListener("click", () => createTask().catch(error => setStatus(error.message)));
     document.getElementById("start-selected-task").addEventListener("click", () => taskAction("start").catch(error => setStatus(error.message)));
     document.getElementById("pause-selected-task").addEventListener("click", () => taskAction("pause").catch(error => setStatus(error.message)));
