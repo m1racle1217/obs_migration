@@ -746,6 +746,7 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertNotIn('id="task-output"', html)
         self.assertNotIn('class="panel task-detail-panel hidden"', html)
         self.assertNotIn("task-grid-has-detail", html)
+        self.assertNotIn("progress-line", html)
         for label in (
             "配置中心",
             "这里是所有任务的总控策略",

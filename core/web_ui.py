@@ -759,8 +759,6 @@ INDEX_HTML = r"""<!doctype html>
     .task-detail-inline .metric-card strong { margin-top: 4px; font-size: 16px; line-height: 1.25; }
     .task-detail-inline .metric-card span { font-size: 11px; }
     .task-detail-inline .worker-list { margin-top: 8px; }
-    .progress-line { height: 8px; border-radius: 999px; background: rgba(255,255,255,.07); overflow: hidden; margin: 12px 0; }
-    .progress-line span { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, #78b7ff, #b58cff, #8bd3ff); }
     .panel { padding: 18px; margin-bottom: 14px; }
     .panel h2 { margin: 0 0 14px; font-size: 18px; letter-spacing: -.025em; }
     .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
@@ -1668,7 +1666,6 @@ INDEX_HTML = r"""<!doctype html>
               <p class="muted">${escapeHtml(task.source || "未设置源")} → ${escapeHtml(task.target || "未设置目标")}</p>
             </div>
           </div>
-          <div class="progress-line"><span style="width:${percent}%"></span></div>
           <p>${escapeHtml(task.state || "unknown")} · ${percent.toFixed(1)}% · 错误 ${(task.dashboard && task.dashboard.upload_errors) || 0}</p>
           <div class="task-card-actions" aria-label="任务控制">
             <button class="primary task-action-start" type="button" data-task-action="start" data-task-id="${escapeHtml(taskId)}">启动</button>
