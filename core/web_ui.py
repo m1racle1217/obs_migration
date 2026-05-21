@@ -739,19 +739,46 @@ INDEX_HTML = r"""<!doctype html>
       text-decoration: none;
       font-weight: 640;
       border: 1px solid transparent;
+      position: relative;
+      overflow: hidden;
+      isolation: isolate;
       background-clip: padding-box;
+      transition: color .18s ease, border-color .18s ease, background .18s ease, box-shadow .18s ease, transform .18s ease;
+    }
+    .nav a::before {
+      content: "";
+      position: absolute;
+      left: 7px;
+      top: 50%;
+      width: 2px;
+      height: 18px;
+      border-radius: 999px;
+      background: linear-gradient(180deg, rgba(139,211,255,.9), rgba(181,140,255,.58));
+      opacity: 0;
+      transform: translateY(-50%) scaleY(.72);
+      transition: opacity .18s ease, transform .18s ease;
+      box-shadow: 0 0 14px rgba(96,165,250,.2);
     }
     .nav a:hover {
       color: #f8fbff;
-      border-color: rgba(96,165,250,.11);
-      background: rgba(255,255,255,.045);
-      box-shadow: 0 10px 28px rgba(0,0,0,.18);
+      border-color: rgba(96,165,250,.14);
+      background:
+        linear-gradient(100deg, rgba(96,165,250,.12), rgba(181,140,255,.07) 52%, rgba(255,255,255,.02)),
+        rgba(255,255,255,.026);
+      box-shadow: 0 12px 30px rgba(0,0,0,.2);
+      transform: translateX(1px);
     }
     .nav a.active {
-      background: linear-gradient(135deg, rgba(96,165,250,.22), rgba(181,140,255,.12));
+      background:
+        linear-gradient(100deg, rgba(96,165,250,.2), rgba(181,140,255,.11) 58%, rgba(45,212,191,.035)),
+        rgba(255,255,255,.025);
       border-color: rgba(96,165,250,.16);
       color: var(--text);
       box-shadow: 0 12px 36px rgba(37,99,235,.12);
+    }
+    .nav a:hover::before, .nav a.active::before {
+      opacity: .78;
+      transform: translateY(-50%) scaleY(1);
     }
     .main { padding: 26px 32px 44px; }
     .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
@@ -1657,6 +1684,8 @@ INDEX_HTML = r"""<!doctype html>
     const browserTitle = document.getElementById("browser-title");
     const browserContext = document.getElementById("browser-context");
     const browserModeNote = document.getElementById("browser-mode-note");
+    const TASK_LIST_REFRESH_MS = 3000;
+    const TASK_DETAIL_REFRESH_MS = 800;
     let selectedTaskId = null;
     let selectedLogTaskId = null;
     let allTasks = [];
@@ -1672,6 +1701,8 @@ INDEX_HTML = r"""<!doctype html>
     let browserHistory = [];
     let browserForward = [];
     let taskDetailRequestId = 0;
+    let taskDetailRefreshInFlight = false;
+    let taskListRefreshInFlight = false;
     let expandedPresetId = null;
     let expandedPresetGroups = new Set(["source", "target", "both"]);
     let pendingBatchDeleteSignature = "";
@@ -1799,10 +1830,32 @@ INDEX_HTML = r"""<!doctype html>
       renderTasks(allTasks);
       syncLogTaskSelect(allTasks);
       if (selectedTaskId && taskDetailExpanded && allTasks.some(task => task.task_id === selectedTaskId)) {
-        await loadTask(selectedTaskId);
+        await refreshSelectedTaskDetail(true);
       } else {
         if (selectedTaskId && !allTasks.some(task => task.task_id === selectedTaskId)) selectedTaskId = null;
         hideTaskDetailPanel();
+      }
+    }
+    async function refreshTaskList() {
+      if (taskListRefreshInFlight) return;
+      taskListRefreshInFlight = true;
+      try {
+        await loadTasks();
+      } finally {
+        taskListRefreshInFlight = false;
+      }
+    }
+    function shouldRefreshTaskDetail() {
+      return currentPage() === "dashboard" && Boolean(selectedTaskId) && taskDetailExpanded && !document.getElementById("task-detail-panel").classList.contains("hidden");
+    }
+    async function refreshSelectedTaskDetail(force = false) {
+      if (!force && !shouldRefreshTaskDetail()) return;
+      if (taskDetailRefreshInFlight) return;
+      taskDetailRefreshInFlight = true;
+      try {
+        await loadTask(selectedTaskId, { quiet: true });
+      } finally {
+        taskDetailRefreshInFlight = false;
       }
     }
     function taskBucket(task) {
@@ -1950,14 +2003,22 @@ INDEX_HTML = r"""<!doctype html>
         <button class="danger" type="button" data-task-action="stop" data-task-id="${escapeHtml(taskId)}" ${canStop ? "" : "disabled"}>停止</button>
       </div>`;
     }
-    async function loadTask(taskId) {
+    async function loadTask(taskId, options = {}) {
       const requestId = ++taskDetailRequestId;
       const data = await api("/api/tasks/" + taskId);
       if (requestId !== taskDetailRequestId || selectedTaskId !== taskId) return;
-      renderTask(data.task);
+      upsertTaskSnapshot(data.task);
+      renderTask(data.task, options);
       if (currentPage() === "logs") loadTaskLog(taskId).catch(error => taskLogOutput.value = error.message);
     }
-    function renderTask(task) {
+    function upsertTaskSnapshot(task) {
+      if (!task || !task.task_id) return;
+      const index = allTasks.findIndex(item => item.task_id === task.task_id);
+      if (index >= 0) allTasks[index] = task;
+      else allTasks.push(task);
+      renderTaskFilters(allTasks);
+    }
+    function renderTask(task, options = {}) {
       const d = task.dashboard || {};
       const metrics = [
         ["总进度", pct(d.percent).toFixed(1) + "%"],
@@ -1988,7 +2049,7 @@ INDEX_HTML = r"""<!doctype html>
       workerList.innerHTML = "<p class='muted'>Worker 明细路径已移到“日志 / 报告”页实时查看，仪表盘只保留汇总指标。</p>";
       renderConcurrency(task.concurrency || {});
       showTaskDetailPanel();
-      setStatus("任务状态已更新");
+      if (!options.quiet) setStatus("任务状态已更新");
     }
     function formatQueueMetric(queue) {
       queue = queue || {};
@@ -2889,7 +2950,8 @@ INDEX_HTML = r"""<!doctype html>
       showApp();
       await Promise.all([loadTasks(), loadConfig(), loadBrowserProfiles()]);
       browse(false).catch(() => {});
-      window.setInterval(() => loadTasks().catch(() => {}), 3000);
+      window.setInterval(() => refreshTaskList().catch(() => {}), TASK_LIST_REFRESH_MS);
+      window.setInterval(() => refreshSelectedTaskDetail().catch(() => {}), TASK_DETAIL_REFRESH_MS);
       window.setInterval(() => {
         if (currentPage() === "logs") loadTaskLog().catch(() => {});
       }, 3000);

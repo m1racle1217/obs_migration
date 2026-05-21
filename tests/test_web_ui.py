@@ -869,6 +869,13 @@ class WebConsoleServerTests(unittest.TestCase):
             'function hideTaskDetailPanel',
             'function attachTaskDetailPanel',
             'if (selectedTaskId && taskDetailExpanded && allTasks.some',
+            'const TASK_DETAIL_REFRESH_MS = 800',
+            'function refreshSelectedTaskDetail',
+            'taskDetailRefreshInFlight',
+            'window.setInterval(() => refreshSelectedTaskDetail().catch(() => {}), TASK_DETAIL_REFRESH_MS)',
+            'function upsertTaskSnapshot',
+            'renderTask(data.task, options)',
+            'if (!options.quiet) setStatus("任务状态已更新")',
             'class="task-editor hidden"',
             'id="new-task-source-profile"',
             'id="new-task-target-profile"',
@@ -1043,12 +1050,18 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertNotIn("function setTargetDirectoryFromBrowser", html)
         nav_link_block = html.split(".nav a {", 1)[1].split("}", 1)[0]
         self.assertIn("background-clip: padding-box", nav_link_block)
+        self.assertIn("overflow: hidden", nav_link_block)
+        self.assertIn(".nav a::before", html)
+        nav_accent_block = html.split(".nav a::before {", 1)[1].split("}", 1)[0]
+        self.assertIn("linear-gradient(180deg, rgba(139,211,255,.9), rgba(181,140,255,.58))", nav_accent_block)
         nav_hover_block = html.split(".nav a:hover {", 1)[1].split("}", 1)[0]
         self.assertNotIn("inset 0 1px 0", nav_hover_block)
         self.assertNotIn("var(--hover-art)", nav_hover_block)
         self.assertNotIn("rgba(191,219,254", nav_hover_block)
+        self.assertIn("linear-gradient(100deg", nav_hover_block)
         nav_active_block = html.split(".nav a.active {", 1)[1].split("}", 1)[0]
         self.assertNotIn("rgba(255,255,255,.16)", nav_active_block)
+        self.assertIn("linear-gradient(100deg", nav_active_block)
         self.assertIn("const detailRows = isLocalProfile", html)
         self.assertIn("<dt>本地路径</dt>", html)
         self.assertIn("<dt>Bucket</dt>", html)
