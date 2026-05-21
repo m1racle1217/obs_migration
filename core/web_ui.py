@@ -2847,15 +2847,44 @@ class WebConsoleServer:
         self._send_json(request, {"ok": True, "task_id": task_id, "task": self.task_manager.snapshot(task_id)})
 
     def _handle_delete_task(self, request, task_id):
-        if not hasattr(self.task_manager, "delete_task"):
-            self._send_json(request, {"ok": False, "error": "task delete is unavailable"}, HTTPStatus.BAD_REQUEST)
-            return
         try:
-            deleted_task_id = self.task_manager.delete_task(task_id)
+            deleted_task_id = self._delete_task(task_id)
         except KeyError:
             self._send_json(request, {"ok": False, "error": "task not found"}, HTTPStatus.NOT_FOUND)
             return
+        except AttributeError:
+            self._send_json(request, {"ok": False, "error": "task delete is unavailable"}, HTTPStatus.BAD_REQUEST)
+            return
         self._send_json(request, {"ok": True, "task_id": deleted_task_id, "tasks": self.task_manager.list_tasks()})
+
+    def _delete_task(self, task_id):
+        delete_task = getattr(self.task_manager, "delete_task", None)
+        if callable(delete_task):
+            return delete_task(task_id)
+
+        tasks = getattr(self.task_manager, "_tasks", None)
+        lock = getattr(self.task_manager, "_lock", None)
+        if tasks is None:
+            raise AttributeError("task manager does not support delete")
+
+        if lock is None:
+            if task_id not in tasks:
+                raise KeyError(task_id)
+            task = tasks.pop(task_id)
+            if getattr(self.task_manager, "_selected_task_id", None) == task_id:
+                self.task_manager._selected_task_id = next(iter(tasks), None)
+        else:
+            with lock:
+                if task_id not in tasks:
+                    raise KeyError(task_id)
+                task = tasks.pop(task_id)
+                if getattr(self.task_manager, "_selected_task_id", None) == task_id:
+                    self.task_manager._selected_task_id = next(iter(tasks), None)
+
+        stop_task = getattr(task, "stop", None)
+        if callable(stop_task):
+            stop_task()
+        return task_id
 
     def _handle_get_task(self, request, task_id):
         try:

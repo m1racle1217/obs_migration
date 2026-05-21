@@ -548,6 +548,37 @@ class WebConsoleServerTests(unittest.TestCase):
         releases["a"].set()
         releases["b"].set()
 
+    def test_delete_task_supports_hot_reloaded_legacy_manager_instance(self):
+        class LegacyTask:
+            def __init__(self):
+                self.stopped = False
+
+            def stop(self):
+                self.stopped = True
+                return True
+
+        class LegacyMultiTaskManager:
+            def __init__(self):
+                self.task = LegacyTask()
+                self._tasks = {"legacy-task": self.task}
+                self._selected_task_id = "legacy-task"
+                self._lock = threading.Lock()
+
+            def list_tasks(self):
+                return [{"task_id": task_id} for task_id in self._tasks]
+
+        manager = LegacyMultiTaskManager()
+        _server, client, _saved, _cfg = self.make_server(make_config(require_login=False), task_manager=manager)
+
+        status, data, _headers = client.request("DELETE", "/api/tasks/legacy-task")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["task_id"], "legacy-task")
+        self.assertEqual(data["tasks"], [])
+        self.assertEqual(manager._selected_task_id, None)
+        self.assertTrue(manager.task.stopped)
+
     def test_task_concurrency_cannot_exceed_global_limits(self):
         cfg = make_config()
         cfg.set("UPLOAD", "workers", "4")
