@@ -37,6 +37,7 @@ def _scan_local_entries(
     scan_done_event=None,
     scan_controller=None,
     controls=None,
+    excluded_roots=None,
 ):
     stop_token = object()
 
@@ -58,6 +59,35 @@ def _scan_local_entries(
     def wait_if_paused():
         if controls is not None:
             controls.wait_if_paused(poll_interval=0.05)
+
+    def normalize_excluded_root(path):
+        try:
+            return os.path.normcase(os.path.abspath(os.fsdecode(path)))
+        except Exception:
+            return ""
+
+    excluded_root_paths = [
+        path for path in (normalize_excluded_root(path) for path in (excluded_roots or [])) if path
+    ]
+
+    def is_excluded(path_bytes):
+        if not excluded_root_paths:
+            return False
+
+        try:
+            current_path = os.path.normcase(os.path.abspath(os.fsdecode(path_bytes)))
+        except Exception:
+            return False
+
+        for root_path in excluded_root_paths:
+            if current_path == root_path:
+                return True
+            try:
+                if os.path.commonpath([current_path, root_path]) == root_path:
+                    return True
+            except ValueError:
+                continue
+        return False
 
     def defer_claimed_item(item):
         scan_queue.put(item)
@@ -114,6 +144,10 @@ def _scan_local_entries(
 
         wait_if_paused()
         if stop_requested():
+            return
+
+        if is_excluded(local_path_bytes):
+            report_skip(local_path_bytes, "runtime_output")
             return
 
         clean_name = clean_path_to_utf8(os.path.basename(local_path_bytes))
@@ -200,6 +234,10 @@ def _scan_local_entries(
                 if stop_requested():
                     continue
 
+                if is_excluded(current_path_bytes):
+                    report_skip(current_path_bytes, "runtime_output")
+                    continue
+
                 if item_type == "file":
                     handle_file(current_path_bytes, base_dir_bytes)
                 else:
@@ -210,6 +248,10 @@ def _scan_local_entries(
                                 break
 
                             try:
+                                if is_excluded(entry.path):
+                                    report_skip(entry.path, "runtime_output")
+                                    continue
+
                                 if entry.is_dir(follow_symlinks=False):
                                     wait_if_paused()
                                     if stop_requested():
@@ -297,6 +339,7 @@ def scan_directory(
     scan_controller=None,
     base_dir=None,
     controls=None,
+    excluded_roots=None,
 ):
     root_dir = root_dir or ""
     effective_base_dir = base_dir or root_dir
@@ -311,6 +354,7 @@ def scan_directory(
         scan_done_event=scan_done_event,
         scan_controller=scan_controller,
         controls=controls,
+        excluded_roots=excluded_roots,
     )
 
 
@@ -327,6 +371,7 @@ def scan_local_sources(
     scan_done_event=None,
     scan_controller=None,
     controls=None,
+    excluded_roots=None,
 ):
     return _scan_local_entries(
         entries,
@@ -338,4 +383,5 @@ def scan_local_sources(
         scan_done_event=scan_done_event,
         scan_controller=scan_controller,
         controls=controls,
+        excluded_roots=excluded_roots,
     )

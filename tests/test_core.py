@@ -450,6 +450,44 @@ class ScannerTests(unittest.TestCase):
                 ]),
             )
 
+    def test_scan_directory_excludes_runtime_output_roots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_dir = root / "check_report"
+            report_dir.mkdir()
+            (root / "payload.txt").write_text("payload", encoding="utf-8")
+            (report_dir / "source_list_6_20260521_152303.csv").write_text(
+                "source_path,target_path,size,status,message\n",
+                encoding="utf-8",
+            )
+
+            reporter = MemoryReporter()
+            progress = Progress()
+            task_queue = queue.Queue()
+
+            scan_directory(
+                str(root),
+                task_queue,
+                progress,
+                checkpoint=None,
+                reporter=reporter,
+                scan_workers=1,
+                excluded_roots=[str(report_dir)],
+            )
+
+            tasks = []
+            while not task_queue.empty():
+                tasks.append(task_queue.get_nowait())
+
+            self.assertEqual([task["relative_path"] for task in tasks], ["payload.txt"])
+            self.assertEqual(
+                [item["source_path"] for item in reporter.tracked],
+                [str(root / "payload.txt")],
+            )
+            self.assertEqual(progress.snapshot()["scan_skip"], 1)
+            self.assertEqual(reporter.rows[0]["status"], "SKIP_SCAN")
+            self.assertIn("runtime_output", reporter.rows[0]["msg"])
+
     # ================================
     # 验证本地通配符会保留静态根目录
     # ================================

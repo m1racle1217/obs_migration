@@ -3220,6 +3220,12 @@ def run_migration(cfg, controls=None):
 
     report_dir = resolve_runtime_path("./check_report")
     os.makedirs(report_dir, exist_ok=True)
+    runtime_output_paths = [
+        report_dir,
+        log_dir,
+        state_dir,
+        failed_dir,
+    ]
 
     log_file = build_log_file(log_dir, source_label)
     setup_logger(log_file)
@@ -3509,6 +3515,7 @@ def run_migration(cfg, controls=None):
                         scan_done_event,
                         scan_controller=scan_controller,
                         controls=controls,
+                        excluded_roots=runtime_output_paths,
                     )
                 except Exception as exc:
                     set_status("scan", "error")
