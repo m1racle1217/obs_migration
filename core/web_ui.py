@@ -564,8 +564,53 @@ INDEX_HTML = r"""<!doctype html>
     }
     label { display: grid; gap: 8px; color: var(--soft); font-weight: 640; }
     .hidden { display: none !important; }
-    .login-view { min-height: 100dvh; display: grid; place-items: center; padding: 28px; position: relative; }
+    .login-view {
+      min-height: 100dvh;
+      display: grid;
+      place-items: center;
+      padding: 28px;
+      position: relative;
+      overflow: hidden;
+      isolation: isolate;
+      background:
+        radial-gradient(circle at 50% 50%, rgba(139,211,255,.14), transparent 28%),
+        radial-gradient(circle at 14% 22%, rgba(59,130,246,.18), transparent 34%),
+        radial-gradient(circle at 86% 72%, rgba(181,140,255,.13), transparent 32%),
+        linear-gradient(135deg, #08192b 0%, #06101d 48%, #02070e 100%);
+    }
+    .login-view::before {
+      content: "";
+      position: absolute;
+      inset: -18%;
+      z-index: -2;
+      pointer-events: none;
+      opacity: .78;
+      background:
+        radial-gradient(ellipse at 18% 24%, rgba(96,165,250,.22), transparent 32%),
+        radial-gradient(ellipse at 78% 18%, rgba(139,211,255,.14), transparent 30%),
+        radial-gradient(ellipse at 62% 78%, rgba(181,140,255,.12), transparent 34%),
+        conic-gradient(from 210deg at 50% 50%, transparent 0deg, rgba(96,165,250,.11) 62deg, transparent 128deg, rgba(181,140,255,.09) 210deg, transparent 300deg);
+      filter: blur(18px) saturate(118%);
+      animation: loginAuroraDrift 24s ease-in-out infinite alternate;
+      transform: translate3d(0,0,0);
+    }
+    .login-view::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      opacity: .28;
+      background-image:
+        linear-gradient(rgba(139,211,255,.055) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(139,211,255,.045) 1px, transparent 1px),
+        radial-gradient(circle at 50% 50%, transparent 0 42%, rgba(96,165,250,.08) 43%, transparent 56%);
+      background-size: 72px 72px, 72px 72px, 780px 780px;
+      mask-image: radial-gradient(circle at 50% 45%, rgba(0,0,0,.95), transparent 74%);
+      animation: loginGridGlide 32s linear infinite;
+    }
     .login-card {
+      z-index: 1;
       width: min(390px, calc(100vw - 32px));
       display: block;
       border: 1px solid var(--line);
@@ -574,6 +619,21 @@ INDEX_HTML = r"""<!doctype html>
       box-shadow: 0 24px 80px rgba(0,0,0,.42);
       overflow: hidden;
       backdrop-filter: blur(24px);
+    }
+    @keyframes loginAuroraDrift {
+      0% { transform: translate3d(-2%, -1%, 0) scale(1); opacity: .68; }
+      50% { transform: translate3d(2%, 1%, 0) scale(1.035); opacity: .82; }
+      100% { transform: translate3d(1%, -2%, 0) scale(1.06); opacity: .72; }
+    }
+    @keyframes loginGridGlide {
+      0% { background-position: 0 0, 0 0, 50% 50%; }
+      100% { background-position: 72px 72px, -72px 72px, 52% 48%; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .login-view::before,
+      .login-view::after {
+        animation: none;
+      }
     }
     .login-hero, .login-form { padding: 56px; }
     .login-hero { display: none; }

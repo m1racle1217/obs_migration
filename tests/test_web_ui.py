@@ -1048,6 +1048,22 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertIn("<dt>Bucket</dt>", html)
         self.assertIn("<dt>Prefix</dt>", html)
 
+    def test_static_page_uses_subtle_animated_login_backdrop(self):
+        _server, client, _saved, _cfg = self.make_server()
+
+        status, html, _headers = client.request("GET", "/")
+
+        self.assertEqual(status, 200)
+        self.assertIn(".login-view::before", html)
+        self.assertIn(".login-view::after", html)
+        self.assertIn("loginAuroraDrift", html)
+        self.assertIn("loginGridGlide", html)
+        self.assertIn("radial-gradient(circle at 50% 50%, rgba(139,211,255,.14)", html)
+        self.assertIn("linear-gradient(rgba(139,211,255,.055) 1px, transparent 1px)", html)
+        self.assertIn(".login-card {\n      z-index: 1;", html)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", html)
+        self.assertIn("animation: none;", html)
+
     def test_config_reload_returns_current_payload(self):
         _server, client, _saved, cfg = self.make_server()
         client.request("POST", "/api/login", {"username": "admin", "password": "secret"})
