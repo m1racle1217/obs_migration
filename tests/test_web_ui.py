@@ -1003,6 +1003,29 @@ class WebConsoleServerTests(unittest.TestCase):
         primary_block = html.split("button.primary {", 1)[1].split("}", 1)[0]
         self.assertNotIn("#eff6ff", primary_block)
 
+    def test_static_page_polishes_browser_profiles_and_controls(self):
+        _server, client, _saved, _cfg = self.make_server()
+
+        status, html, _headers = client.request("GET", "/")
+
+        self.assertEqual(status, 200)
+        self.assertIn("#browser.panel {", html)
+        self.assertIn("border-color: transparent;", html)
+        self.assertIn("background: transparent;", html)
+        self.assertIn("select { color-scheme: dark;", html)
+        self.assertIn("select option {", html)
+        self.assertIn("#browser-back { --button-rgb", html)
+        self.assertIn("#browser-forward { --button-rgb", html)
+        self.assertIn("#browser-up { --button-rgb", html)
+        self.assertIn("#browser-refresh { --button-rgb", html)
+        self.assertIn("#browser-save-profile { --button-rgb", html)
+        self.assertIn(".profile-chip.selected", html)
+        self.assertIn('chip.className = "profile-chip" + (profile.id === current ? " selected" : "")', html)
+        self.assertIn('chip.setAttribute("aria-selected", profile.id === current ? "true" : "false")', html)
+        self.assertIn('button.className = "profile-chip-delete danger"', html)
+        self.assertIn('button.textContent = "删除"', html)
+        self.assertIn('deletePositionPreset(profile.id)', html)
+
     def test_config_reload_returns_current_payload(self):
         _server, client, _saved, cfg = self.make_server()
         client.request("POST", "/api/login", {"username": "admin", "password": "secret"})

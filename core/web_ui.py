@@ -532,6 +532,15 @@ INDEX_HTML = r"""<!doctype html>
     [data-task-filter="completed"] { --button-rgb: 52, 211, 153; --button-rgb-2: 45, 212, 191; }
     [data-task-filter="failed"] { --button-rgb: 251, 113, 133; --button-rgb-2: 244, 63, 94; }
     [data-task-filter="unstarted"] { --button-rgb: 148, 163, 184; --button-rgb-2: 96, 165, 250; }
+    #browser-add-list { --button-rgb: 59, 130, 246; --button-rgb-2: 45, 212, 191; }
+    #browser-set-target { --button-rgb: 52, 211, 153; --button-rgb-2: 34, 197, 94; }
+    #browser-fill-task { --button-rgb: 139, 92, 246; --button-rgb-2: 217, 70, 239; }
+    #browser-back { --button-rgb: 99, 102, 241; --button-rgb-2: 59, 130, 246; }
+    #browser-forward { --button-rgb: 14, 165, 233; --button-rgb-2: 45, 212, 191; }
+    #browser-up { --button-rgb: 245, 158, 11; --button-rgb-2: 251, 191, 36; }
+    #browser-refresh { --button-rgb: 125, 211, 252; --button-rgb-2: 96, 165, 250; }
+    #browser-save-profile { --button-rgb: 181, 140, 255; --button-rgb-2: 217, 70, 239; }
+    #browser-go { --button-rgb: 45, 212, 191; --button-rgb-2: 96, 165, 250; }
     button:disabled { opacity: .48; cursor: not-allowed; }
     input, select, textarea {
       width: 100%;
@@ -542,6 +551,11 @@ INDEX_HTML = r"""<!doctype html>
       background: rgba(255,255,255,.045);
       color: var(--text);
       outline: none;
+    }
+    select { color-scheme: dark; background-color: #20242c; }
+    select option {
+      color: var(--text);
+      background: #17191d;
     }
     textarea { min-height: 92px; resize: vertical; }
     input:focus, select:focus, textarea:focus {
@@ -809,6 +823,13 @@ INDEX_HTML = r"""<!doctype html>
     .task-detail-inline .metric-card span { font-size: 11px; }
     .task-detail-inline .worker-list { margin-top: 8px; }
     .panel { padding: 18px; margin-bottom: 14px; }
+    #browser.panel {
+      padding: 0;
+      border-color: transparent;
+      background: transparent;
+      box-shadow: none;
+      overflow: visible;
+    }
     .panel h2 { margin: 0 0 14px; font-size: 18px; letter-spacing: -.025em; }
     .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
     .metric-card { padding: 16px; transition: transform .2s ease, border-color .2s ease, background .2s ease; }
@@ -1045,6 +1066,10 @@ INDEX_HTML = r"""<!doctype html>
     .profile-chip {
       width: 100%;
       min-height: 34px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
       border-radius: 11px;
       padding: 7px 9px;
       border: 1px solid var(--line);
@@ -1052,6 +1077,31 @@ INDEX_HTML = r"""<!doctype html>
       color: var(--soft);
       text-align: left;
       cursor: pointer;
+    }
+    .profile-chip.selected {
+      color: #f8fbff;
+      border-color: rgba(191,219,254,.34);
+      background:
+        var(--hover-art) center / cover,
+        #20242c;
+      box-shadow: inset 3px 0 0 #93c5fd, 0 16px 48px rgba(37,99,235,.18);
+    }
+    .profile-chip-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .profile-chip-delete {
+      min-height: 26px;
+      border-radius: 8px;
+      padding: 0 8px;
+      font-size: 11px;
+      opacity: .66;
+    }
+    .profile-chip:hover .profile-chip-delete,
+    .profile-chip.selected .profile-chip-delete {
+      opacity: 1;
     }
     .preset-manager {
       display: grid;
@@ -2542,8 +2592,21 @@ INDEX_HTML = r"""<!doctype html>
         option.textContent = formatBrowserProfileLabel(profile);
         select.appendChild(option);
         const chip = document.createElement("div");
-        chip.className = "profile-chip";
-        chip.textContent = `${formatBrowserProfileLabel(profile)} · ${browserProfilePath(profile) || "根目录"}`;
+        chip.className = "profile-chip" + (profile.id === current ? " selected" : "");
+        chip.setAttribute("aria-selected", profile.id === current ? "true" : "false");
+        const label = document.createElement("span");
+        label.className = "profile-chip-label";
+        label.textContent = `${formatBrowserProfileLabel(profile)} · ${browserProfilePath(profile) || "根目录"}`;
+        const button = document.createElement("button");
+        button.className = "profile-chip-delete danger";
+        button.type = "button";
+        button.textContent = "删除";
+        button.addEventListener("click", event => {
+          event.stopPropagation();
+          deletePositionPreset(profile.id).catch(error => setConfigOutput("位置预设删除失败：" + error.message, true));
+        });
+        chip.appendChild(label);
+        chip.appendChild(button);
         chip.addEventListener("click", () => applyBrowserProfile(profile.id));
         list.appendChild(chip);
       });
@@ -2583,6 +2646,7 @@ INDEX_HTML = r"""<!doctype html>
       document.getElementById("browser-path").value = profile.path || profile.prefix || "";
       document.getElementById("browser-bucket").value = profile.bucket || "";
       browserMode = document.getElementById("browser-scope").value === "TARGET" ? "target" : "source";
+      renderBrowserProfiles();
       browse(true).catch(error => browserOutput.textContent = error.message);
     }
     async function saveCurrentBrowserProfile() {
