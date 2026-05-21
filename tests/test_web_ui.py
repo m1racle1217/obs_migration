@@ -708,6 +708,7 @@ class WebConsoleServerTests(unittest.TestCase):
                 "role": "target",
                 "type": "remote",
                 "section": "TARGET",
+                "endpoint": "https://obs.example.com",
                 "bucket": "prod-bucket",
                 "prefix": "root/out",
             },
@@ -721,7 +722,23 @@ class WebConsoleServerTests(unittest.TestCase):
 
         status, data, _headers = client.request("GET", "/api/browser/profiles")
         self.assertEqual(status, 200)
+        self.assertEqual(data["profiles"][1]["endpoint"], "https://obs.example.com")
         self.assertEqual(data["profiles"][1]["bucket"], "prod-bucket")
+
+    def test_default_remote_browser_profiles_include_endpoint(self):
+        cfg = make_config(require_login=False)
+        cfg.set("SOURCE", "type", "s3")
+        cfg.set("SOURCE", "endpoint", "https://source.obs.example.com")
+        cfg.set("TARGET", "type", "s3")
+        cfg.set("TARGET", "endpoint", "https://target.obs.example.com")
+        _server, client, _saved, _cfg = self.make_server(cfg)
+
+        status, data, _headers = client.request("GET", "/api/browser/profiles")
+
+        self.assertEqual(status, 200)
+        profiles = {item["id"]: item for item in data["profiles"]}
+        self.assertEqual(profiles["source-default"]["endpoint"], "https://source.obs.example.com")
+        self.assertEqual(profiles["target-default"]["endpoint"], "https://target.obs.example.com")
 
     def test_static_page_contains_shell_labels(self):
         _server, client, _saved, _cfg = self.make_server()
@@ -883,6 +900,7 @@ class WebConsoleServerTests(unittest.TestCase):
             'id="position-preset-list"',
             'id="position-preset-modal"',
             'id="open-position-preset-modal"',
+            'class="preset-group-header"',
             'function renderPositionPresetManager',
             'function createPositionPreset',
             'function createPresetCard',
@@ -977,6 +995,8 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("button:hover:not(:disabled)", html)
         self.assertIn("--hover-art: url(\"data:image/svg+xml", html)
+        self.assertIn("--cursor-arrow: url(\"data:image/svg+xml", html)
+        self.assertIn("cursor: var(--cursor-arrow)", html)
         self.assertIn("linear-gradient(135deg, rgb(var(--button-rgb)), rgb(var(--button-rgb-2)))", html)
         self.assertIn("font-size: 13px;", html)
         button_block = html.split("button {", 1)[1].split("}", 1)[0]
@@ -988,7 +1008,7 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertIn(".preset-card::after", html)
         self.assertIn(".profile-chip:hover::after", html)
         self.assertIn(".explorer-commandbar {\n      display: grid;", html)
-        self.assertIn("grid-template-columns: repeat(4, max-content) minmax(320px, 1fr) max-content minmax(220px, 320px);", html)
+        self.assertIn("grid-template-columns: repeat(5, max-content) minmax(320px, 1fr) minmax(220px, 320px);", html)
         self.assertIn(".browser-table tr:hover, .browser-table tr.selected", html)
         self.assertIn(".login-form { display: flex; flex-direction: column; justify-content: center; gap: 22px; padding: 38px 36px; }", html)
         self.assertIn(".login-form .muted { margin: 0;", html)
@@ -998,6 +1018,10 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertIn("function compactCount", html)
         self.assertIn("满 · ${waiting}等待", html)
         self.assertNotIn('未完成 ${unfinished}', html)
+        preset_group_header_block = html.split(".preset-group-header {", 1)[1].split("}", 1)[0]
+        self.assertIn("align-items: center", preset_group_header_block)
+        self.assertIn("line-height: 1.2", preset_group_header_block)
+        self.assertIn(".preset-group-header span", html)
         self.assertIn('[data-task-filter="running"]', html)
         self.assertIn("#batch-delete-tasks { --button-rgb", html)
         primary_block = html.split("button.primary {", 1)[1].split("}", 1)[0]
@@ -1039,15 +1063,21 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertNotIn('id="browser-add-list"', titlebar_block)
         self.assertNotIn('id="browser-set-target"', titlebar_block)
         self.assertNotIn('id="browser-fill-task"', titlebar_block)
+        commandbar_markup = html.split('<div class="explorer-commandbar">', 1)[1].split('<div class="explorer-addressbar">', 1)[0]
+        self.assertIn('id="browser-save-profile"', commandbar_markup)
         footer_block = html.split('<div class="explorer-footer">', 1)[1].split('</div>', 1)[0]
-        self.assertIn('id="browser-selection-actions"', footer_block)
-        self.assertIn('id="browser-save-profile"', footer_block)
+        self.assertNotIn('id="browser-selection-actions"', footer_block)
+        self.assertNotIn('id="browser-save-profile"', footer_block)
         self.assertNotIn('id="browser-add-list"', html)
         self.assertNotIn('id="browser-set-target"', html)
         self.assertNotIn('id="browser-fill-task"', html)
         self.assertNotIn("function addSelectedToList", html)
         self.assertNotIn("function fillSelectedTaskConfig", html)
         self.assertNotIn("function setTargetDirectoryFromBrowser", html)
+        self.assertIn("function firstSelectedBrowserItem", html)
+        self.assertIn("const selectedItem = firstSelectedBrowserItem()", html)
+        self.assertIn('if (defaults.endpoint !== undefined)', html)
+        self.assertIn('endpoint: profile ? profile.endpoint || "" : ""', html)
         nav_link_block = html.split(".nav a {", 1)[1].split("}", 1)[0]
         self.assertIn("background-clip: padding-box", nav_link_block)
         self.assertIn("overflow: hidden", nav_link_block)

@@ -445,6 +445,7 @@ INDEX_HTML = r"""<!doctype html>
       --violet: #b58cff;
       --danger: #fb7185;
       --hover-art: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 900 520'%3E%3Cdefs%3E%3Cfilter id='blur'%3E%3CfeGaussianBlur stdDeviation='52'/%3E%3C/filter%3E%3ClinearGradient id='base' x1='0' y1='1' x2='1' y2='0'%3E%3Cstop offset='0' stop-color='%233b4ed8'/%3E%3Cstop offset='.45' stop-color='%235f7fe7'/%3E%3Cstop offset='1' stop-color='%23dbeafe'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='900' height='520' fill='url(%23base)'/%3E%3Cg filter='url(%23blur)' opacity='.9'%3E%3Cellipse cx='700' cy='120' rx='290' ry='210' fill='%23eef6ff'/%3E%3Cellipse cx='210' cy='430' rx='330' ry='220' fill='%233a34d1'/%3E%3Cellipse cx='470' cy='270' rx='260' ry='190' fill='%2392c5ff'/%3E%3Cellipse cx='790' cy='430' rx='220' ry='160' fill='%235748c9'/%3E%3C/g%3E%3C/svg%3E");
+      --cursor-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cdefs%3E%3Cfilter id='s' x='-40%25' y='-40%25' width='180%25' height='180%25'%3E%3CfeDropShadow dx='0' dy='1.5' stdDeviation='1.4' flood-color='%23000000' flood-opacity='.78'/%3E%3C/filter%3E%3C/defs%3E%3Cpath filter='url(%23s)' d='M7 4.5 24.5 16.4 17.1 18.7 14.2 27.2Z' fill='%23080d14' stroke='%23f8fbff' stroke-width='2.7' stroke-linejoin='round'/%3E%3C/svg%3E") 7 5, auto;
       --radius: 22px;
       --radius-lg: 28px;
       --font: Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif;
@@ -462,6 +463,7 @@ INDEX_HTML = r"""<!doctype html>
       font-family: var(--font);
       font-size: 13px;
       overflow-x: hidden;
+      cursor: var(--cursor-arrow);
     }
     body::before {
       content: "";
@@ -476,6 +478,12 @@ INDEX_HTML = r"""<!doctype html>
       background-size: cover;
     }
     button, input, select, textarea { font: inherit; }
+    button, a, select, label, summary, .task-card, .profile-chip,
+    .preset-card, .preset-group-header, .browser-table tr {
+      cursor: var(--cursor-arrow);
+    }
+    input, textarea { cursor: text; }
+    input[type="checkbox"], input[type="radio"], input[type="button"], input[type="submit"] { cursor: var(--cursor-arrow); }
     button {
       --button-rgb: 148, 163, 184;
       --button-rgb-2: 96, 165, 250;
@@ -484,7 +492,6 @@ INDEX_HTML = r"""<!doctype html>
       border-radius: 12px;
       padding: 0 16px;
       font-weight: 680;
-      cursor: pointer;
       color: var(--soft);
       background:
         linear-gradient(135deg, rgba(var(--button-rgb), .065), rgba(var(--button-rgb-2), .035)),
@@ -538,7 +545,7 @@ INDEX_HTML = r"""<!doctype html>
     #browser-refresh { --button-rgb: 125, 211, 252; --button-rgb-2: 96, 165, 250; }
     #browser-save-profile { --button-rgb: 181, 140, 255; --button-rgb-2: 217, 70, 239; }
     #browser-go { --button-rgb: 45, 212, 191; --button-rgb-2: 96, 165, 250; }
-    button:disabled { opacity: .48; cursor: not-allowed; }
+    button:disabled { opacity: .48; }
     input, select, textarea {
       width: 100%;
       min-height: 44px;
@@ -858,7 +865,7 @@ INDEX_HTML = r"""<!doctype html>
       --task-progress: 0%;
       --task-accent: 96,165,250;
       padding: 17px;
-      cursor: pointer;
+      cursor: var(--cursor-arrow);
       transition: transform .22s ease, border-color .22s ease, background .22s ease, box-shadow .22s ease;
       background:
         linear-gradient(90deg, rgba(var(--task-accent), .48) 0%, rgba(var(--task-accent), .30) var(--task-progress), rgba(255,255,255,.035) var(--task-progress), rgba(255,255,255,.012) 100%),
@@ -1086,7 +1093,7 @@ INDEX_HTML = r"""<!doctype html>
     .browser-context { color: var(--muted); font-size: 12px; }
     .explorer-commandbar {
       display: grid;
-      grid-template-columns: repeat(4, max-content) minmax(320px, 1fr) max-content minmax(220px, 320px);
+      grid-template-columns: repeat(5, max-content) minmax(320px, 1fr) minmax(220px, 320px);
       align-items: end;
       gap: 10px;
     }
@@ -1162,7 +1169,7 @@ INDEX_HTML = r"""<!doctype html>
       background: rgba(255,255,255,.035);
       color: var(--soft);
       text-align: left;
-      cursor: pointer;
+      cursor: var(--cursor-arrow);
     }
     .profile-chip.selected {
       color: #f8fbff;
@@ -1220,11 +1227,19 @@ INDEX_HTML = r"""<!doctype html>
       border: 0;
       border-radius: 0;
       display: flex;
+      align-items: center;
       justify-content: space-between;
+      gap: 14px;
+      line-height: 1.2;
       background: rgba(255,255,255,.035);
     }
+    .preset-group-header span {
+      display: inline-flex;
+      align-items: center;
+      min-height: 1.2em;
+    }
     .preset-group-body { display: grid; gap: 8px; padding: 10px; }
-    .preset-card { cursor: pointer; }
+    .preset-card { cursor: var(--cursor-arrow); }
     .preset-card-details { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.6; }
     .preset-detail-grid { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 7px 10px; }
     .preset-detail-grid dt { margin: 0; color: #93c5fd; font-weight: 850; }
@@ -1287,7 +1302,7 @@ INDEX_HTML = r"""<!doctype html>
       font-weight: 800;
     }
     .browser-table td { padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,.045); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .browser-table tr { cursor: default; }
+    .browser-table tr { cursor: var(--cursor-arrow); }
     .browser-table tr:hover, .browser-table tr.selected {
       background:
         var(--hover-art) center / cover,
@@ -1300,7 +1315,7 @@ INDEX_HTML = r"""<!doctype html>
       height: 18px;
       min-height: 18px;
       accent-color: #93c5fd;
-      cursor: pointer;
+      cursor: var(--cursor-arrow);
     }
     .file-name { display: flex; align-items: center; gap: 9px; }
     .file-icon {
@@ -1380,7 +1395,7 @@ INDEX_HTML = r"""<!doctype html>
       padding: 0 12px;
       font-size: 12px;
     }
-    .explorer-details summary { cursor: pointer; color: var(--muted); margin: 10px 0; }
+    .explorer-details summary { cursor: var(--cursor-arrow); color: var(--muted); margin: 10px 0; }
     .worker-list { display: grid; gap: 8px; }
     .worker-item { border: 1px solid var(--line); border-radius: 14px; padding: 10px; color: var(--soft); background: rgba(255,255,255,.035); }
     @media (max-width: 980px) {
@@ -1544,6 +1559,7 @@ INDEX_HTML = r"""<!doctype html>
             <button id="browser-forward" type="button" title="前进">前进</button>
             <button id="browser-up" type="button" title="上一级">上一级</button>
             <button id="browser-refresh" type="button" title="刷新">刷新</button>
+            <button id="browser-save-profile" type="button">加入位置预设</button>
             <input id="browser-scope" type="hidden" value="local">
             <label class="inline-select">选择位置预设
               <select id="browser-profile-select" aria-label="选择位置预设">
@@ -1576,9 +1592,6 @@ INDEX_HTML = r"""<!doctype html>
           <div class="explorer-footer">
             <span id="browser-status">等待浏览...</span>
             <span id="browser-selected">未选择项目</span>
-            <div id="browser-selection-actions" class="explorer-selection-actions">
-              <button id="browser-save-profile" type="button">加入位置预设</button>
-            </div>
           </div>
         </div>
         <details class="explorer-details">
@@ -2665,8 +2678,11 @@ INDEX_HTML = r"""<!doctype html>
       if (defaults.role) document.getElementById("position-preset-role").value = defaults.role;
       if (defaults.type) document.getElementById("position-preset-type").value = defaults.type;
       if (defaults.path !== undefined) document.getElementById("position-preset-path").value = defaults.path || "";
+      if (defaults.endpoint !== undefined) document.getElementById("position-preset-endpoint").value = defaults.endpoint || "";
       if (defaults.bucket !== undefined) document.getElementById("position-preset-bucket").value = defaults.bucket || "";
       if (defaults.prefix !== undefined) document.getElementById("position-preset-prefix").value = defaults.prefix || "";
+      if (defaults.ak !== undefined) document.getElementById("position-preset-ak").value = defaults.ak || "";
+      if (defaults.sk !== undefined) document.getElementById("position-preset-sk").value = defaults.sk || "";
       updatePositionPresetFieldVisibility();
       document.getElementById("position-preset-name").focus();
     }
@@ -2695,6 +2711,9 @@ INDEX_HTML = r"""<!doctype html>
     function selectedBrowserProfile() {
       const profileId = document.getElementById("browser-profile-select").value;
       return browserProfiles.find(profile => profile.id === profileId) || null;
+    }
+    function firstSelectedBrowserItem() {
+      return Array.from(selectedBrowserItems.values())[0] || selectedBrowserItem || null;
     }
     function browserProfileScope(profile) {
       if (!profile) return "local";
@@ -2835,15 +2854,34 @@ INDEX_HTML = r"""<!doctype html>
     }
     async function saveCurrentBrowserProfile() {
       const loc = browserLocation();
+      const profile = selectedBrowserProfile();
+      const selectedItem = firstSelectedBrowserItem();
+      let path = loc.path;
+      let bucket = loc.bucket;
+      if (selectedItem) {
+        const selectedPath = selectedItem.path || selectedItem.name || "";
+        if (loc.scope === "local") {
+          path = selectedPath || path;
+        } else if (selectedItem.kind === "bucket") {
+          bucket = selectedItem.name || bucket;
+          path = "";
+        } else {
+          path = selectedPath || path;
+        }
+      }
+      const displayName = bucket ? [bucket, path].filter(Boolean).join("/") : path;
       openPositionPresetModal({
-        name: `${loc.scope} ${loc.bucket || loc.path || "root"}`,
+        name: `${loc.scope} ${displayName || "root"}`,
         role: loc.scope === "TARGET" ? "target" : "source",
         type: loc.scope === "local" ? "local" : "remote",
-        path: loc.scope === "local" ? loc.path : "",
-        bucket: loc.bucket || "",
-        prefix: loc.scope === "local" ? "" : loc.path
+        path: loc.scope === "local" ? path : "",
+        endpoint: profile ? profile.endpoint || "" : "",
+        bucket: loc.scope === "local" ? "" : bucket || "",
+        prefix: loc.scope === "local" ? "" : path,
+        ak: profile ? profile.ak || "" : "",
+        sk: profile ? profile.sk || "" : ""
       });
-      setStatus("请确认位置预设设置后保存。");
+      setStatus(selectedItem ? "已用勾选/选中的项目填入位置预设，请确认后保存。" : "请确认位置预设设置后保存。");
     }
     function updateBrowserModeChrome() {
       const sourceMode = browserMode !== "target";
@@ -3688,6 +3726,7 @@ def _default_browser_profiles(cfg):
                 "path": cfg.get("SOURCE", "path", fallback=""),
                 "bucket": cfg.get("SOURCE", "bucket", fallback=""),
                 "prefix": cfg.get("SOURCE", "prefix", fallback=""),
+                "endpoint": cfg.get("SOURCE", "endpoint", fallback=""),
             }
         )
     if cfg.has_section("TARGET"):
@@ -3702,6 +3741,7 @@ def _default_browser_profiles(cfg):
                 "path": cfg.get("TARGET", "path", fallback=""),
                 "bucket": cfg.get("TARGET", "bucket", fallback=""),
                 "prefix": cfg.get("TARGET", "prefix", fallback=""),
+                "endpoint": cfg.get("TARGET", "endpoint", fallback=""),
             }
         )
     return profiles
