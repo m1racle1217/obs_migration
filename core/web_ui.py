@@ -689,7 +689,7 @@ INDEX_HTML = r"""<!doctype html>
       background:
         var(--hover-art) center / cover,
         #20242c;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 16px 42px rgba(37,99,235,.16);
+      box-shadow: 0 16px 42px rgba(37,99,235,.16);
     }
     .nav a.active {
       background: linear-gradient(135deg, rgba(96,165,250,.22), rgba(181,140,255,.12));
@@ -1012,6 +1012,11 @@ INDEX_HTML = r"""<!doctype html>
       border-radius: 9px;
       padding: 0 12px;
       font-weight: 750;
+      background:
+        linear-gradient(135deg, rgba(var(--button-rgb), .045), rgba(var(--button-rgb-2), .026)),
+        rgba(255,255,255,.018);
+      border-color: rgba(255,255,255,.06);
+      color: #cbd5e1;
     }
     .explorer-addressbar { display: grid; grid-template-columns: auto minmax(180px, 1fr) minmax(120px, 210px) auto; }
     .explorer-addressbar input, .explorer-commandbar input, .explorer-commandbar select { min-height: 44px; border-radius: 9px; }
@@ -1082,9 +1087,9 @@ INDEX_HTML = r"""<!doctype html>
       color: #f8fbff;
       border-color: rgba(191,219,254,.34);
       background:
-        var(--hover-art) center / cover,
+        linear-gradient(135deg, rgba(96,165,250,.18), rgba(181,140,255,.08)),
         #20242c;
-      box-shadow: inset 3px 0 0 #93c5fd, 0 16px 48px rgba(37,99,235,.18);
+      box-shadow: 0 16px 42px rgba(37,99,235,.14);
     }
     .profile-chip-label {
       min-width: 0;
@@ -1221,18 +1226,77 @@ INDEX_HTML = r"""<!doctype html>
       width: 18px;
       height: 14px;
       flex: 0 0 auto;
+      position: relative;
       border: 1px solid rgba(255,255,255,.18);
       border-radius: 3px;
       background: linear-gradient(180deg, rgba(147,197,253,.26), rgba(59,130,246,.18));
       box-shadow: inset 0 1px 0 rgba(255,255,255,.18);
     }
-    .file-icon.file { height: 18px; border-radius: 4px; background: linear-gradient(180deg, rgba(226,232,240,.18), rgba(96,165,250,.1)); }
-    .file-icon.bucket { border-radius: 999px; background: linear-gradient(180deg, rgba(103,232,249,.18), rgba(37,99,235,.2)); }
+    .file-icon.folder::before {
+      content: "";
+      position: absolute;
+      left: 1px;
+      top: -5px;
+      width: 8px;
+      height: 5px;
+      border: 1px solid rgba(255,255,255,.18);
+      border-bottom: 0;
+      border-radius: 3px 3px 0 0;
+      background: rgba(147,197,253,.2);
+    }
+    .file-icon.file {
+      width: 14px;
+      height: 18px;
+      border-radius: 4px;
+      background: linear-gradient(180deg, rgba(226,232,240,.18), rgba(96,165,250,.1));
+    }
+    .file-icon.file::before {
+      content: "";
+      position: absolute;
+      right: -1px;
+      top: -1px;
+      width: 6px;
+      height: 6px;
+      border-left: 1px solid rgba(255,255,255,.16);
+      border-bottom: 1px solid rgba(255,255,255,.16);
+      border-radius: 0 3px 0 2px;
+      background: rgba(226,232,240,.22);
+    }
+    .file-icon.bucket {
+      height: 16px;
+      border-radius: 999px / 44%;
+      background: linear-gradient(180deg, rgba(103,232,249,.18), rgba(37,99,235,.2));
+    }
+    .file-icon.bucket::before {
+      content: "";
+      position: absolute;
+      left: -1px;
+      right: -1px;
+      top: -1px;
+      height: 6px;
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 999px;
+      background: rgba(139,211,255,.18);
+    }
     .explorer-footer {
       justify-content: space-between;
       border-top: 1px solid rgba(96,165,250,.16);
       border-bottom: 0;
       color: var(--muted);
+      font-size: 12px;
+    }
+    .explorer-selection-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      margin-left: auto;
+    }
+    .explorer-selection-actions button {
+      min-height: 34px;
+      border-radius: 9px;
+      padding: 0 12px;
       font-size: 12px;
     }
     .explorer-details summary { cursor: pointer; color: var(--muted); margin: 10px 0; }
@@ -1393,11 +1457,6 @@ INDEX_HTML = r"""<!doctype html>
               <h2 id="browser-title">位置预设浏览</h2>
               <div id="browser-context" class="browser-context">选择一个位置预设，就像打开资源管理器里的收藏位置。</div>
             </div>
-            <div class="actions">
-              <button id="browser-add-list" class="primary" type="button">加入迁移列表</button>
-              <button id="browser-set-target" class="primary hidden" type="button">迁移到当前目录</button>
-              <button id="browser-fill-task" type="button">填入任务配置</button>
-            </div>
           </div>
           <div class="explorer-commandbar">
             <button id="browser-back" type="button" title="后退">后退</button>
@@ -1437,6 +1496,11 @@ INDEX_HTML = r"""<!doctype html>
           <div class="explorer-footer">
             <span id="browser-status">等待浏览...</span>
             <span id="browser-selected">未选择项目</span>
+            <div id="browser-selection-actions" class="explorer-selection-actions hidden">
+              <button id="browser-add-list" class="primary hidden" type="button">加入迁移列表</button>
+              <button id="browser-set-target" class="primary hidden" type="button">迁移到当前目录</button>
+              <button id="browser-fill-task" type="button" class="hidden">填入任务配置</button>
+            </div>
           </div>
         </div>
         <details class="explorer-details">
@@ -2378,17 +2442,25 @@ INDEX_HTML = r"""<!doctype html>
       const card = document.createElement("article");
       card.className = "preset-card";
       const expanded = expandedPresetId === profile.id;
+      const roleText = normalizedProfileRole(profile) === "source" ? "源端" : normalizedProfileRole(profile) === "target" ? "目的端" : "通用";
+      const typeValue = String(profile.type || "local").toLowerCase();
+      const isLocalProfile = typeValue === "local";
+      const detailRows = isLocalProfile
+        ? `<dt>用途</dt><dd>${escapeHtml(roleText)}</dd>
+               <dt>类型</dt><dd>LOCAL</dd>
+               <dt>本地路径</dt><dd>${escapeHtml(profile.path || "-")}</dd>`
+        : `<dt>用途</dt><dd>${escapeHtml(roleText)}</dd>
+               <dt>类型</dt><dd>${escapeHtml(String(profile.type || "remote").toUpperCase())}</dd>
+               <dt>Endpoint</dt><dd>${escapeHtml(profile.endpoint || "-")}</dd>
+               <dt>Bucket</dt><dd>${escapeHtml(profile.bucket || "-")}</dd>
+               <dt>Prefix</dt><dd>${escapeHtml(profile.prefix || "-")}</dd>`;
       card.innerHTML = `
         <div class="preset-card-main">
           <strong>${escapeHtml(formatBrowserProfileLabel(profile))}</strong>
           <span>${escapeHtml(browserProfilePath(profile) || "根目录")}</span>
           <div class="preset-card-details ${expanded ? "" : "hidden"}">
             <dl class="preset-detail-grid">
-              <dt>用途</dt><dd>${escapeHtml(normalizedProfileRole(profile) === "source" ? "源端" : normalizedProfileRole(profile) === "target" ? "目的端" : "通用")}</dd>
-              <dt>类型</dt><dd>${escapeHtml(String(profile.type || "local").toUpperCase())}</dd>
-              <dt>Endpoint</dt><dd>${escapeHtml(profile.endpoint || "本地路径")}</dd>
-              <dt>Bucket</dt><dd>${escapeHtml(profile.bucket || "-")}</dd>
-              <dt>路径 / Prefix</dt><dd>${escapeHtml(browserProfilePath(profile) || "-")}</dd>
+              ${detailRows}
             </dl>
           </div>
         </div>
@@ -2667,9 +2739,19 @@ INDEX_HTML = r"""<!doctype html>
       browserTitle.textContent = "位置预设浏览";
       browserContext.textContent = profile ? `正在浏览位置预设：${profile.name || profile.id}` : "选择位置预设后浏览其中的目录或对象。";
       browserModeNote.textContent = sourceMode ? "当前预设可作为源端迁移入口：勾选目录或对象后加入迁移列表，也可以填入新任务源路径。" : "当前预设可作为目标落点：进入目标目录后，点击“迁移到当前目录”写入新任务目标。";
-      document.getElementById("browser-add-list").classList.toggle("hidden", !sourceMode);
-      document.getElementById("browser-fill-task").classList.toggle("hidden", !sourceMode);
-      document.getElementById("browser-set-target").classList.toggle("hidden", sourceMode);
+      updateBrowserActionVisibility();
+    }
+    function updateBrowserActionVisibility() {
+      const actions = document.getElementById("browser-selection-actions");
+      const sourceMode = browserMode !== "target";
+      const hasProfile = Boolean(selectedBrowserProfile());
+      const hasSelection = selectedBrowserItems.size > 0 || Boolean(selectedBrowserItem);
+      const showSourceActions = sourceMode && hasSelection;
+      const showTargetActions = !sourceMode && hasProfile;
+      document.getElementById("browser-add-list").classList.toggle("hidden", !showSourceActions);
+      document.getElementById("browser-fill-task").classList.toggle("hidden", !showSourceActions);
+      document.getElementById("browser-set-target").classList.toggle("hidden", !showTargetActions);
+      if (actions) actions.classList.toggle("hidden", !(showSourceActions || showTargetActions));
     }
     function renderBreadcrumbs(page) {
       const scope = document.getElementById("browser-scope").value;
@@ -2690,6 +2772,7 @@ INDEX_HTML = r"""<!doctype html>
       if (page.bucket !== undefined) document.getElementById("browser-bucket").value = page.bucket || "";
       if (page.prefix !== undefined) document.getElementById("browser-path").value = page.prefix || "";
       browserSelected.textContent = browserMode === "target" ? "当前目标目录：" + (currentBrowserDirectory() || "未设置") : "未选择项目";
+      updateBrowserActionVisibility();
       renderBreadcrumbs(page);
       browserBody.innerHTML = "";
       const items = (page.items || []).slice().sort((left, right) => {
@@ -2719,6 +2802,7 @@ INDEX_HTML = r"""<!doctype html>
           browserBody.querySelectorAll("tr").forEach(row => row.classList.remove("selected"));
           tr.classList.add("selected");
           browserSelected.textContent = browserMode === "target" ? `已选择：${item.name || ""}；目标落点仍以当前目录为准` : `已选择：${item.name || ""}`;
+          updateBrowserActionVisibility();
         });
         tr.addEventListener("dblclick", () => enterBrowserItem(item));
         browserBody.appendChild(tr);
@@ -2736,6 +2820,7 @@ INDEX_HTML = r"""<!doctype html>
       } else {
         browserSelected.textContent = browserMode === "target" ? "当前目标目录：" + (currentBrowserDirectory() || "未设置") : "未选择项目";
       }
+      updateBrowserActionVisibility();
     }
     function enterBrowserItem(item) {
       if (!item || item.kind === "file") return;

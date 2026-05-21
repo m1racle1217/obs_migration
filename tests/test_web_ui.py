@@ -1020,11 +1020,33 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertIn("#browser-refresh { --button-rgb", html)
         self.assertIn("#browser-save-profile { --button-rgb", html)
         self.assertIn(".profile-chip.selected", html)
+        selected_chip_block = html.split(".profile-chip.selected {", 1)[1].split("}", 1)[0]
+        self.assertNotIn("var(--hover-art)", selected_chip_block)
+        self.assertNotIn("inset 3px", selected_chip_block)
         self.assertIn('chip.className = "profile-chip" + (profile.id === current ? " selected" : "")', html)
         self.assertIn('chip.setAttribute("aria-selected", profile.id === current ? "true" : "false")', html)
         self.assertIn('button.className = "profile-chip-delete danger"', html)
         self.assertIn('button.textContent = "删除"', html)
         self.assertIn('deletePositionPreset(profile.id)', html)
+        self.assertIn(".file-icon.folder::before", html)
+        self.assertIn(".file-icon.file::before", html)
+        self.assertIn(".file-icon.bucket::before", html)
+        command_button_block = html.split(".explorer-commandbar button {", 1)[1].split("}", 1)[0]
+        self.assertIn("background:", command_button_block)
+        self.assertIn("rgba(var(--button-rgb), .045)", command_button_block)
+        titlebar_block = html.split('<div class="explorer-titlebar">', 1)[1].split('<div class="explorer-commandbar">', 1)[0]
+        self.assertNotIn('id="browser-add-list"', titlebar_block)
+        self.assertNotIn('id="browser-set-target"', titlebar_block)
+        self.assertNotIn('id="browser-fill-task"', titlebar_block)
+        footer_block = html.split('<div class="explorer-footer">', 1)[1].split('</div>', 1)[0]
+        self.assertIn('id="browser-selection-actions"', footer_block)
+        self.assertIn('id="browser-add-list"', footer_block)
+        nav_hover_block = html.split(".nav a:hover {", 1)[1].split("}", 1)[0]
+        self.assertNotIn("inset 0 1px 0", nav_hover_block)
+        self.assertIn("const detailRows = isLocalProfile", html)
+        self.assertIn("<dt>本地路径</dt>", html)
+        self.assertIn("<dt>Bucket</dt>", html)
+        self.assertIn("<dt>Prefix</dt>", html)
 
     def test_config_reload_returns_current_payload(self):
         _server, client, _saved, cfg = self.make_server()
