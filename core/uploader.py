@@ -64,6 +64,13 @@ from .utils import (
 TARGET_TYPE_LOCAL = "local"
 TARGET_TYPE_S3 = "s3"
 
+
+class TaskAbortedError(RuntimeError):
+    """Raised by cooperative controls to abort an in-flight transfer."""
+
+    is_task_abort = True
+
+
 _target_type = TARGET_TYPE_S3
 _target_root = None
 _target_prefix = ""
@@ -512,6 +519,9 @@ class OBSUploader:
                     "MISSING",
                     str(exc),
                 )
+                return
+            except TaskAbortedError:
+                logging.info("[STOP] transfer aborted by task controls: %s", context["source_display"])
                 return
             except Exception as exc:
                 retry += 1
@@ -1361,6 +1371,11 @@ class OBSUploader:
         state = {"last": 0}
 
         def callback(transferred, total_amount=None, total_seconds=None):
+            if self.controls is not None:
+                self.controls.wait_if_paused(poll_interval=0.05)
+            if self._stop_requested():
+                raise TaskAbortedError("task stopped")
+
             try:
                 current = max(int(transferred or 0), 0)
             except Exception:
@@ -1375,6 +1390,9 @@ class OBSUploader:
 
             if heartbeat is not None:
                 heartbeat(detail)
+
+            if self._stop_requested():
+                raise TaskAbortedError("task stopped")
 
         return callback
 

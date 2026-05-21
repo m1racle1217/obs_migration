@@ -748,7 +748,35 @@ INDEX_HTML = r"""<!doctype html>
       font-size: 12px;
       word-break: break-all;
     }
-    #task-log-output, #task-report-output { min-height: 460px; }
+    .log-textbox, #task-report-output {
+      height: min(52dvh, 520px);
+      min-height: 260px;
+      overflow: auto;
+      overscroll-behavior: contain;
+    }
+    .log-textbox {
+      resize: none;
+      border-radius: 14px;
+      padding: 14px;
+      line-height: 1.55;
+      font-family: ui-monospace, Consolas, monospace;
+      color: #e0f2fe;
+      background: rgba(2,8,23,.76);
+      white-space: pre-wrap;
+    }
+    .log-downloads { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 12px; }
+    .log-downloads a {
+      min-height: 36px;
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 0 13px;
+      color: var(--soft);
+      text-decoration: none;
+      font-weight: 800;
+      background: rgba(96,165,250,.08);
+    }
     .browser-window {
       min-height: calc(100dvh - 190px);
       display: grid;
@@ -891,6 +919,41 @@ INDEX_HTML = r"""<!doctype html>
     }
     .preset-card strong, .preset-card span { display: block; }
     .preset-card span { color: var(--muted); font-size: 12px; margin-top: 4px; word-break: break-all; }
+    .preset-group { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: rgba(3,9,22,.36); }
+    .preset-group + .preset-group { margin-top: 10px; }
+    .preset-group-header {
+      width: 100%;
+      border: 0;
+      border-radius: 0;
+      display: flex;
+      justify-content: space-between;
+      background: rgba(96,165,250,.1);
+    }
+    .preset-group-body { display: grid; gap: 8px; padding: 10px; }
+    .preset-card { cursor: pointer; }
+    .preset-card-details { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(96,165,250,.14); color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .preset-actions { display: flex; gap: 8px; align-items: center; }
+    .preset-actions button { min-height: 32px; border-radius: 9px; padding: 0 10px; font-size: 12px; }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      background: rgba(2,6,23,.68);
+      backdrop-filter: blur(12px);
+    }
+    .modal-card {
+      width: min(720px, calc(100vw - 32px));
+      max-height: calc(100dvh - 40px);
+      overflow: auto;
+      border: 1px solid var(--line-strong);
+      border-radius: 20px;
+      background: linear-gradient(180deg, rgba(18,32,56,.96), rgba(5,13,29,.96));
+      padding: 18px;
+      box-shadow: 0 24px 90px rgba(2,6,23,.5);
+    }
     .explorer-main { min-width: 0; overflow: auto; background: rgba(2,8,20,.38); }
     .explorer-breadcrumbs {
       display: flex;
@@ -1056,10 +1119,24 @@ INDEX_HTML = r"""<!doctype html>
       <section id="positions" class="panel" data-page="positions">
         <h2>位置预设</h2>
         <p class="muted">位置预设用于给常用本地目录、OBS/S3 Bucket/Prefix 起名字；新增任务和目录浏览都按预设名称选择。</p>
+        <div class="toolbar"><button id="open-position-preset-modal" class="primary" type="button">新增位置预设</button></div>
         <section class="preset-manager" aria-label="位置预设管理">
           <div>
             <h2>位置预设</h2>
-            <p class="muted">输入路径时先保存一个名字，以后新增任务和目录浏览都直接按名字选择。</p>
+            <p class="muted">源端预设、目的端预设和通用预设按列表折叠展示；点一下展开，再点一下折叠。</p>
+          </div>
+          <div id="position-preset-list" class="preset-list" aria-label="已保存的位置预设"></div>
+        </section>
+      </section>
+
+      <div id="position-preset-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="position-preset-modal-title">
+        <section class="modal-card">
+          <div class="top">
+            <div>
+              <h2 id="position-preset-modal-title">新增位置预设</h2>
+              <p class="muted">输入路径时先保存一个名字；后续任务和目录浏览直接按名字选择。</p>
+            </div>
+            <button id="close-position-preset-modal" type="button">关闭</button>
           </div>
           <div id="position-preset-form" class="split">
             <label>预设名称 <input id="position-preset-name" placeholder="例如：客户A源目录 / 生产目标桶"></label>
@@ -1073,9 +1150,8 @@ INDEX_HTML = r"""<!doctype html>
             <label>SecretKey <input id="position-preset-sk" type="password" autocomplete="new-password"></label>
           </div>
           <div class="toolbar"><button id="position-preset-save" class="primary" type="button">保存位置预设</button></div>
-          <div id="position-preset-list" class="preset-list" aria-label="已保存的位置预设"></div>
         </section>
-      </section>
+      </div>
 
       <section id="config" class="panel" data-page="config">
         <h2>配置中心</h2>
@@ -1112,7 +1188,7 @@ INDEX_HTML = r"""<!doctype html>
                 <option value="">选择位置预设后浏览</option>
               </select>
             </label>
-            <button id="browser-save-profile" type="button">保存当前位置为预设</button>
+            <button id="browser-save-profile" type="button">加入位置预设</button>
             <input id="browser-filter" class="explorer-search" placeholder="搜索当前文件夹">
           </div>
           <div class="explorer-addressbar">
@@ -1166,7 +1242,8 @@ INDEX_HTML = r"""<!doctype html>
           <span>任务日志文件：等待任务启动...</span>
           <span>报告文件：等待任务生成...</span>
         </div>
-        <pre id="task-log-output">请选择一个任务，或启动任务后查看实时日志。</pre>
+        <div id="task-log-downloads" class="log-downloads" aria-label="下载日志和报告"></div>
+        <textarea id="task-log-output" class="log-textbox" readonly aria-label="任务实时日志">请选择一个任务，或启动任务后查看实时日志。</textarea>
         <pre id="task-report-output" class="hidden">请选择一个任务，或任务结束后查看报告。</pre>
       </section>
     </main>
@@ -1234,6 +1311,7 @@ INDEX_HTML = r"""<!doctype html>
     const taskLogOutput = document.getElementById("task-log-output");
     const taskReportOutput = document.getElementById("task-report-output");
     const taskLogMeta = document.getElementById("task-log-meta");
+    const taskLogDownloads = document.getElementById("task-log-downloads");
     const logTaskSelect = document.getElementById("log-task-select");
     const browserBody = document.getElementById("browser-body");
     const browserStatus = document.getElementById("browser-status");
@@ -1257,6 +1335,8 @@ INDEX_HTML = r"""<!doctype html>
     let browserHistory = [];
     let browserForward = [];
     let taskDetailRequestId = 0;
+    let expandedPresetId = null;
+    let expandedPresetGroups = new Set(["source", "target", "both"]);
 
     function showLogin(message) {
       localStorage.removeItem(AUTH_KEY);
@@ -1290,7 +1370,7 @@ INDEX_HTML = r"""<!doctype html>
       if (page !== "dashboard") document.getElementById("task-editor").classList.add("hidden");
       setStatus((PAGE_TITLES[page] || "页面") + " 已打开");
       if (page === "logs") loadTaskLog().catch(error => {
-        if (taskLogOutput) taskLogOutput.textContent = error.message;
+        if (taskLogOutput) taskLogOutput.value = error.message;
       });
     }
     async function api(path, options) {
@@ -1486,7 +1566,7 @@ INDEX_HTML = r"""<!doctype html>
       const data = await api("/api/tasks/" + taskId);
       if (requestId !== taskDetailRequestId || selectedTaskId !== taskId) return;
       renderTask(data.task);
-      if (currentPage() === "logs") loadTaskLog(taskId).catch(error => taskLogOutput.textContent = error.message);
+      if (currentPage() === "logs") loadTaskLog(taskId).catch(error => taskLogOutput.value = error.message);
     }
     function renderTask(task) {
       const d = task.dashboard || {};
@@ -1509,17 +1589,31 @@ INDEX_HTML = r"""<!doctype html>
         ["上传错误", d.upload_errors || 0],
         ["累计处理速度", bytes(d.process_speed) + "/s"],
         ["实时上传速度", bytes(d.net_upload_speed) + "/s"],
-        ["检查队列", JSON.stringify(d.check_queue || {})],
-        ["传输队列", JSON.stringify(d.transfer_queue || {})],
-        ["检查线程", JSON.stringify(d.check_workers || {})],
-        ["上传线程", JSON.stringify(d.upload_workers || {})],
-        ["扫描线程", JSON.stringify(d.scan_workers || {})],
+        ["检查队列", formatQueueMetric(d.check_queue)],
+        ["传输队列", formatQueueMetric(d.transfer_queue)],
+        ["检查线程", formatWorkerMetric(d.check_workers)],
+        ["上传线程", formatWorkerMetric(d.upload_workers)],
+        ["扫描线程", formatWorkerMetric(d.scan_workers)],
       ];
       dashboardMetrics.innerHTML = metrics.map(([k, v]) => `<div class="metric-card"><span>${k}</span><strong>${v}</strong></div>`).join("");
-      workerList.innerHTML = (d.active_workers || []).map(w => `<div class="worker-item">${w.stage || ""} ${w.worker_name || ""} ${w.detail || ""}<br>${w.task_summary || ""}</div>`).join("") || "<p class='muted'>暂无活跃 Worker</p>";
+      workerList.innerHTML = "<p class='muted'>Worker 明细路径已移到“日志 / 报告”页实时查看，仪表盘只保留汇总指标。</p>";
       renderConcurrency(task.concurrency || {});
       showTaskDetailPanel();
       setStatus("任务状态已更新");
+    }
+    function formatQueueMetric(queue) {
+      queue = queue || {};
+      const current = Number(queue.current || 0);
+      const max = Number(queue.max || 0);
+      const unfinished = Number(queue.unfinished || 0);
+      return `${current}${max > 0 ? "/" + max : ""} · 未完成 ${unfinished}`;
+    }
+    function formatWorkerMetric(workers) {
+      workers = workers || {};
+      const active = Number(workers.active_workers || 0);
+      const stalled = Number(workers.stalled_workers || 0);
+      const total = Array.isArray(workers.workers) ? workers.workers.length : active;
+      return `${active}/${total} 活跃 · 卡住 ${stalled}`;
     }
     function showTaskDetailPanel() {
       taskDetailExpanded = true;
@@ -1573,14 +1667,14 @@ INDEX_HTML = r"""<!doctype html>
         button.setAttribute("aria-selected", active ? "true" : "false");
       });
       if (taskLogOutput) taskLogOutput.classList.toggle("hidden", logTab !== "log");
-      if (taskReportOutput) taskReportOutput.classList.toggle("hidden", logTab !== "report");
+      if (taskReportOutput) taskReportOutput.classList.add("hidden");
     }
     async function loadTaskLog(taskId = selectedLogTaskId || selectedTaskId) {
       if (!taskLogOutput || !taskLogMeta) return;
       taskId = (logTaskSelect && logTaskSelect.value) || taskId;
       if (!taskId) {
         taskLogMeta.innerHTML = "<span>任务日志文件：未选择任务</span><span>报告文件：未选择任务</span>";
-        taskLogOutput.textContent = "请先在任务仪表盘选择一个任务。";
+        taskLogOutput.value = "请先在任务仪表盘选择一个任务。";
         if (taskReportOutput) taskReportOutput.textContent = "请先选择一个任务。";
         return;
       }
@@ -1591,7 +1685,8 @@ INDEX_HTML = r"""<!doctype html>
         "任务日志文件：" + (log.path || "任务尚未启动，暂无日志文件"),
         "报告文件：" + (log.report_file || "任务尚未生成报告")
       ].map(item => `<span>${escapeHtml(item)}</span>`).join("");
-      taskLogOutput.textContent = log.content || "任务日志为空或尚未写入。";
+      renderLogDownloads(taskId, log);
+      taskLogOutput.value = log.content || "任务日志为空或尚未写入。";
       if (taskReportOutput) {
         taskReportOutput.textContent = [
           "报告文件：" + (log.report_file || "任务尚未生成报告"),
@@ -1601,6 +1696,14 @@ INDEX_HTML = r"""<!doctype html>
         ].join("\n");
       }
       renderLogTab();
+    }
+    function renderLogDownloads(taskId, log) {
+      if (!taskLogDownloads) return;
+      const links = [];
+      if (log.path) links.push(["log", "下载日志"]);
+      if (log.report_file) links.push(["report", "下载报告"]);
+      if (log.summary_file) links.push(["summary", "下载摘要"]);
+      taskLogDownloads.innerHTML = links.map(([kind, label]) => `<a href="/api/tasks/${encodeURIComponent(taskId)}/download?kind=${kind}" download>${label}</a>`).join("");
     }
     function renderConcurrency(concurrency) {
       document.getElementById("concurrency-upload").value = concurrency.upload_workers || 32;
@@ -1910,14 +2013,86 @@ INDEX_HTML = r"""<!doctype html>
       const list = document.getElementById("position-preset-list");
       if (!list) return;
       list.innerHTML = "";
-      browserProfiles.forEach(profile => {
-        const card = document.createElement("div");
-        card.className = "preset-card";
-        card.innerHTML = `<div><strong>${escapeHtml(formatBrowserProfileLabel(profile))}</strong><span>${escapeHtml(browserProfilePath(profile) || "根目录")}</span></div><span>${escapeHtml(profile.endpoint || profile.bucket || profile.path || "")}</span>`;
-        list.appendChild(card);
+      const groups = [
+        ["source", "源端预设"],
+        ["target", "目的端预设"],
+        ["both", "通用预设"]
+      ];
+      groups.forEach(([role, title]) => {
+        const items = browserProfiles.filter(profile => normalizedProfileRole(profile) === role);
+        const group = document.createElement("section");
+        group.className = "preset-group";
+        const expanded = expandedPresetGroups.has(role);
+        group.innerHTML = `<button class="preset-group-header" type="button" data-preset-group="${role}"><span>${title}</span><span>${items.length} 个 · ${expanded ? "收起" : "展开"}</span></button><div class="preset-group-body ${expanded ? "" : "hidden"}"></div>`;
+        const body = group.querySelector(".preset-group-body");
+        if (!items.length) {
+          body.innerHTML = "<p class='muted'>暂无预设。</p>";
+        }
+        items.forEach(profile => body.appendChild(createPresetCard(profile)));
+        group.querySelector("[data-preset-group]").addEventListener("click", () => {
+          if (expandedPresetGroups.has(role)) expandedPresetGroups.delete(role);
+          else expandedPresetGroups.add(role);
+          renderPositionPresetManager();
+        });
+        list.appendChild(group);
       });
       if (!list.innerHTML) list.innerHTML = "<p class='muted'>暂无位置预设，请先保存一个常用路径。</p>";
       updatePositionPresetFieldVisibility();
+    }
+    function normalizedProfileRole(profile) {
+      if (profile.role === "both") return "both";
+      if (profile.role === "target" || profile.section === "TARGET") return "target";
+      if (profile.role === "source" || profile.section === "SOURCE") return "source";
+      return "both";
+    }
+    function createPresetCard(profile) {
+      const card = document.createElement("article");
+      card.className = "preset-card";
+      const expanded = expandedPresetId === profile.id;
+      card.innerHTML = `
+        <div>
+          <strong>${escapeHtml(formatBrowserProfileLabel(profile))}</strong>
+          <span>${escapeHtml(browserProfilePath(profile) || "根目录")}</span>
+          <div class="preset-card-details ${expanded ? "" : "hidden"}">
+            <div>Endpoint：${escapeHtml(profile.endpoint || "本地")}</div>
+            <div>Bucket：${escapeHtml(profile.bucket || "-")}</div>
+            <div>Prefix / 路径：${escapeHtml(browserProfilePath(profile) || "-")}</div>
+          </div>
+        </div>
+        <div class="preset-actions">
+          <button type="button" data-preset-open="${escapeHtml(profile.id)}">${expanded ? "折叠" : "展开"}</button>
+          <button class="danger" type="button" data-preset-delete="${escapeHtml(profile.id)}">删除</button>
+        </div>`;
+      card.addEventListener("click", () => togglePresetCard(profile.id));
+      card.querySelector("[data-preset-open]").addEventListener("click", event => {
+        event.stopPropagation();
+        togglePresetCard(profile.id);
+      });
+      card.querySelector("[data-preset-delete]").addEventListener("click", event => {
+        event.stopPropagation();
+        deletePositionPreset(profile.id).catch(error => setConfigOutput("位置预设删除失败：" + error.message, true));
+      });
+      return card;
+    }
+    function togglePresetCard(profileId) {
+      expandedPresetId = expandedPresetId === profileId ? null : profileId;
+      renderPositionPresetManager();
+    }
+    async function deletePositionPreset(profileId) {
+      const profile = browserProfiles.find(item => item.id === profileId);
+      if (!profile) return;
+      if (!window.confirm(`确认删除位置预设“${profile.name || profile.id}”？`)) return;
+      const data = await api("/api/browser/profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profiles: browserProfiles.filter(item => item.id !== profileId) })
+      });
+      browserProfiles = data.profiles || [];
+      if (expandedPresetId === profileId) expandedPresetId = null;
+      renderBrowserProfiles();
+      renderTaskProfileSelects();
+      renderPositionPresetManager();
+      setConfigOutput("位置预设已删除。");
     }
     function updatePositionPresetFieldVisibility() {
       const type = document.getElementById("position-preset-type");
@@ -1964,7 +2139,22 @@ INDEX_HTML = r"""<!doctype html>
         const field = document.getElementById(id);
         if (field) field.value = "";
       });
+      closePositionPresetModal();
       setConfigOutput("位置预设已保存。");
+    }
+    function openPositionPresetModal(defaults = {}) {
+      document.getElementById("position-preset-modal").classList.remove("hidden");
+      if (defaults.name !== undefined) document.getElementById("position-preset-name").value = defaults.name || "";
+      if (defaults.role) document.getElementById("position-preset-role").value = defaults.role;
+      if (defaults.type) document.getElementById("position-preset-type").value = defaults.type;
+      if (defaults.path !== undefined) document.getElementById("position-preset-path").value = defaults.path || "";
+      if (defaults.bucket !== undefined) document.getElementById("position-preset-bucket").value = defaults.bucket || "";
+      if (defaults.prefix !== undefined) document.getElementById("position-preset-prefix").value = defaults.prefix || "";
+      updatePositionPresetFieldVisibility();
+      document.getElementById("position-preset-name").focus();
+    }
+    function closePositionPresetModal() {
+      document.getElementById("position-preset-modal").classList.add("hidden");
     }
     async function saveConfig() {
       await api("/api/config", {
@@ -2114,30 +2304,15 @@ INDEX_HTML = r"""<!doctype html>
     }
     async function saveCurrentBrowserProfile() {
       const loc = browserLocation();
-      const nameInput = document.getElementById("profile-name");
-      const name = (nameInput && nameInput.value.trim()) || `${loc.scope} ${loc.bucket || loc.path || "root"}`;
-      const profile = {
-        id: "profile-" + Date.now(),
-        name,
+      openPositionPresetModal({
+        name: `${loc.scope} ${loc.bucket || loc.path || "root"}`,
         role: loc.scope === "TARGET" ? "target" : "source",
         type: loc.scope === "local" ? "local" : "remote",
-        section: loc.scope === "local" ? "" : loc.scope,
-        bucket: loc.bucket || "",
         path: loc.scope === "local" ? loc.path : "",
+        bucket: loc.bucket || "",
         prefix: loc.scope === "local" ? "" : loc.path
-      };
-      const data = await api("/api/browser/profiles", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ profiles: browserProfiles.concat([profile]) })
       });
-      browserProfiles = data.profiles || [];
-      renderBrowserProfiles();
-      renderTaskProfileSelects();
-      renderPositionPresetManager();
-      document.getElementById("browser-profile-select").value = profile.id;
-      if (nameInput) nameInput.value = "";
-      setStatus("位置预设已保存");
+      setStatus("请确认位置预设设置后保存。");
     }
     function updateBrowserModeChrome() {
       const sourceMode = browserMode !== "target";
@@ -2311,7 +2486,7 @@ INDEX_HTML = r"""<!doctype html>
     document.getElementById("login-button").addEventListener("click", login);
     document.getElementById("logout-button").addEventListener("click", logout);
     document.getElementById("refresh-tasks").addEventListener("click", () => loadTasks().catch(error => setStatus(error.message)));
-    document.getElementById("refresh-logs").addEventListener("click", () => loadTaskLog().catch(error => taskLogOutput.textContent = error.message));
+    document.getElementById("refresh-logs").addEventListener("click", () => loadTaskLog().catch(error => taskLogOutput.value = error.message));
     document.querySelectorAll("[data-task-filter]").forEach(button => {
       button.addEventListener("click", () => {
         taskFilter = button.dataset.taskFilter || "all";
@@ -2328,7 +2503,7 @@ INDEX_HTML = r"""<!doctype html>
     if (logTaskSelect) {
       logTaskSelect.addEventListener("change", () => {
         selectedLogTaskId = logTaskSelect.value || selectedLogTaskId;
-        loadTaskLog(selectedLogTaskId).catch(error => taskLogOutput.textContent = error.message);
+        loadTaskLog(selectedLogTaskId).catch(error => taskLogOutput.value = error.message);
       });
     }
     document.getElementById("new-task-button").addEventListener("click", () => {
@@ -2351,6 +2526,8 @@ INDEX_HTML = r"""<!doctype html>
     document.getElementById("save-concurrency").addEventListener("click", () => saveConcurrency().catch(error => setStatus(error.message)));
     document.getElementById("reload-config").addEventListener("click", () => loadConfig().catch(error => setConfigOutput("配置加载失败：" + error.message, true)));
     document.getElementById("save-config").addEventListener("click", () => saveConfig().catch(error => setConfigOutput("配置保存失败：" + error.message, true)));
+    document.getElementById("open-position-preset-modal").addEventListener("click", () => openPositionPresetModal({ role: "source", type: "local" }));
+    document.getElementById("close-position-preset-modal").addEventListener("click", closePositionPresetModal);
     document.getElementById("position-preset-type").addEventListener("change", updatePositionPresetFieldVisibility);
     document.getElementById("position-preset-save").addEventListener("click", () => createPositionPreset().catch(error => setConfigOutput("位置预设保存失败：" + error.message, true)));
     document.getElementById("browser-refresh").addEventListener("click", () => browse(true).catch(error => browserOutput.textContent = error.message));
@@ -2518,6 +2695,8 @@ class WebConsoleServer:
                 self._handle_create_task(request)
             elif task_route and request.command == "DELETE" and not task_route[1]:
                 self._handle_delete_task(request, task_route[0])
+            elif task_route and request.command == "GET" and task_route[1] == "download":
+                self._handle_task_log_download(request, task_route[0], parsed)
             elif task_route and request.command == "GET" and task_route[1] == "logs":
                 self._handle_task_logs(request, task_route[0], parsed)
             elif task_route and request.command == "GET":
@@ -2673,6 +2852,29 @@ class WebConsoleServer:
                 },
             },
         )
+
+    def _handle_task_log_download(self, request, task_id, parsed):
+        query = _query(parsed)
+        kind = _first(query, "kind", "log")
+        key_map = {
+            "log": "log_file",
+            "report": "report_file",
+            "summary": "summary_file",
+        }
+        if kind not in key_map:
+            self._send_json(request, {"ok": False, "error": "invalid download kind"}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            snapshot = self.task_manager.snapshot(task_id)
+        except KeyError:
+            self._send_json(request, {"ok": False, "error": "task not found"}, HTTPStatus.NOT_FOUND)
+            return
+        logs = (snapshot or {}).get("logs") or {}
+        file_path = str(logs.get(key_map[kind]) or "")
+        if not file_path or not os.path.isfile(file_path):
+            self._send_json(request, {"ok": False, "error": "file not found"}, HTTPStatus.NOT_FOUND)
+            return
+        self._send_file(request, file_path)
 
     def _handle_task_concurrency(self, request, task_id):
         if not hasattr(self.task_manager, "update_concurrency"):
@@ -2901,6 +3103,17 @@ class WebConsoleServer:
         request.send_header("Content-Length", str(len(body)))
         for key, value in (headers or {}).items():
             request.send_header(key, value)
+        request.end_headers()
+        request.wfile.write(body)
+
+    def _send_file(self, request, file_path):
+        file_name = os.path.basename(file_path) or "download"
+        with open(file_path, "rb") as handle:
+            body = handle.read()
+        request.send_response(HTTPStatus.OK)
+        request.send_header("Content-Type", "application/octet-stream")
+        request.send_header("Content-Length", str(len(body)))
+        request.send_header("Content-Disposition", f'attachment; filename="{file_name}"')
         request.end_headers()
         request.wfile.write(body)
 

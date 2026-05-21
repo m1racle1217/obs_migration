@@ -632,6 +632,8 @@ class WebConsoleServerTests(unittest.TestCase):
             report_path = os.path.join(tmp, "report.csv")
             with open(log_path, "w", encoding="utf-8") as handle:
                 handle.write("before\nTask Started. Log: task.log\n上传完成\n")
+            with open(report_path, "w", encoding="utf-8") as handle:
+                handle.write("source,target,status\n")
 
             class LogTaskManager(FakeTaskManager):
                 def snapshot(self, task_id=None):
@@ -644,6 +646,7 @@ class WebConsoleServerTests(unittest.TestCase):
             _server, client, _saved, _cfg = self.make_server(cfg, task_manager=LogTaskManager())
 
             status, data, _headers = client.request("GET", "/api/tasks/task-1/logs?max_bytes=200")
+            download_status, content, download_headers = client.request("GET", "/api/tasks/task-1/download?kind=report")
 
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
@@ -652,6 +655,10 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertEqual(data["log"]["report_file"], report_path)
         self.assertIn("Task Started", data["log"]["content"])
         self.assertIn("上传完成", data["log"]["content"])
+
+        self.assertEqual(download_status, 200)
+        self.assertEqual(content.replace("\r\n", "\n"), "source,target,status\n")
+        self.assertIn("attachment;", download_headers["Content-Disposition"])
 
     def test_browser_profiles_api_saves_and_returns_profile_list(self):
         cfg = make_config(require_login=False)
@@ -744,7 +751,11 @@ class WebConsoleServerTests(unittest.TestCase):
             "报告",
             "报告文件",
             "选择位置预设",
-            "保存当前位置为预设",
+            "加入位置预设",
+            "新增位置预设",
+            "源端预设",
+            "目的端预设",
+            "通用预设",
             "<h2>登录</h2>",
             "默认：admin",
             "默认是 admin / admin",
@@ -821,11 +832,19 @@ class WebConsoleServerTests(unittest.TestCase):
             'id="new-task-target-profile"',
             'id="position-preset-form"',
             'id="position-preset-list"',
+            'id="position-preset-modal"',
+            'id="open-position-preset-modal"',
             'function renderPositionPresetManager',
             'function createPositionPreset',
+            'function createPresetCard',
+            'function deletePositionPreset',
+            'function openPositionPresetModal',
+            'function closePositionPresetModal',
             'help.className = "field-help"',
             'function extractGlobalConcurrencyLimits',
             'function concurrencyValue',
+            'function formatQueueMetric',
+            'function formatWorkerMetric',
             'function renderTaskProfileSelects',
             'select.innerHTML = `<option value="">',
             'function taskConfigFromProfiles',
@@ -851,7 +870,10 @@ class WebConsoleServerTests(unittest.TestCase):
             'id="log-tab-log"',
             'id="log-tab-report"',
             'id="task-report-output"',
+            'id="task-log-downloads"',
+            'download>',
             'function loadTaskLog',
+            'function renderLogDownloads',
             'function loadBrowserProfiles',
             'function renderTaskFilters',
             'function taskFilterLabel',
@@ -875,6 +897,16 @@ class WebConsoleServerTests(unittest.TestCase):
             'method: "POST"',
         ):
             self.assertIn(marker, html)
+
+    def test_static_page_keeps_task_log_inside_readonly_textbox(self):
+        _server, client, _saved, _cfg = self.make_server()
+
+        status, html, _headers = client.request("GET", "/")
+
+        self.assertEqual(status, 200)
+        self.assertIn('<textarea id="task-log-output" class="log-textbox" readonly', html)
+        self.assertIn(".log-textbox {", html)
+        self.assertIn("overscroll-behavior: contain;", html)
 
     def test_config_reload_returns_current_payload(self):
         _server, client, _saved, cfg = self.make_server()

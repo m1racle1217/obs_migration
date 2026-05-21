@@ -61,6 +61,8 @@ def call_with_retries(
             response = func()
             last_response = response
         except Exception as exc:
+            if getattr(exc, "is_task_abort", False):
+                raise
             if attempt >= retries:
                 raise
 

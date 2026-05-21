@@ -8,6 +8,7 @@ import os
 import queue
 import sqlite3
 import tempfile
+import threading
 import unittest
 from contextlib import closing
 from datetime import datetime, timezone
@@ -33,7 +34,8 @@ from core.report import Reporter
 from core.scan_control import AdaptiveScanController
 from core.s3_scanner import scan_s3_objects
 from core.scanner import scan_directory, scan_local_sources
-from core.uploader import OBSUploader
+from core.task_manager import TaskControls
+from core.uploader import OBSUploader, TaskAbortedError
 from core.utils import build_object_uri, detect_storage_scheme
 
 
@@ -602,6 +604,40 @@ class ScannerTests(unittest.TestCase):
 # ================================
 class UploaderTests(unittest.TestCase):
     """测试上传、复制、重试与跳过判定逻辑。"""
+
+    def test_progress_callback_pauses_and_aborts_from_controls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            progress = Progress()
+            controls = TaskControls()
+            uploader = OBSUploader(
+                progress,
+                SimpleNamespace(),
+                failed_dir=str(Path(tmp) / "failed"),
+                controls=controls,
+            )
+            callback = uploader._make_progress_callback()
+            entered = threading.Event()
+            finished = threading.Event()
+
+            def run_callback():
+                entered.set()
+                callback(128, 1024, 0.1)
+                finished.set()
+
+            controls.pause_event.set()
+            thread = threading.Thread(target=run_callback)
+            thread.start()
+            self.assertTrue(entered.wait(timeout=1))
+            self.assertFalse(finished.wait(timeout=0.1))
+
+            controls.pause_event.clear()
+            self.assertTrue(finished.wait(timeout=1))
+            thread.join(timeout=1)
+            self.assertEqual(progress.snapshot()["recent_upload_bytes"], 128)
+
+            controls.stop_event.set()
+            with self.assertRaises(TaskAbortedError):
+                callback(256, 1024, 0.2)
 
     # ================================
     # 验证失败重试次数受配置控制
