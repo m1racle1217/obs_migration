@@ -965,7 +965,7 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertIn("linear-gradient(135deg, rgba(96,165,250,.28)", html)
         self.assertIn("font-size: 13px;", html)
         button_block = html.split("button {", 1)[1].split("}", 1)[0]
-        self.assertIn("background: rgba(8,17,34,.28);", button_block)
+        self.assertIn("background: rgba(255,255,255,.035);", button_block)
         primary_block = html.split("button.primary {", 1)[1].split("}", 1)[0]
         self.assertNotIn("#eff6ff", primary_block)
 
