@@ -615,7 +615,6 @@ INDEX_HTML = r"""<!doctype html>
       font-weight: 800;
     }
     .task-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; }
-    .task-grid.task-grid-has-detail { grid-template-columns: minmax(360px, 520px) minmax(0, 1fr); }
     .task-state-tabs, .log-tabs {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -646,6 +645,20 @@ INDEX_HTML = r"""<!doctype html>
     .task-card { padding: 15px; cursor: pointer; }
     .task-card.selected { border-color: var(--primary-strong); box-shadow: 0 0 0 2px rgba(96,165,250,.18); }
     .task-card h3 { margin: 0 0 8px; }
+    .task-detail-inline {
+      margin: -2px 0 8px 18px;
+      padding: 13px;
+      border: 1px solid rgba(147,197,253,.34);
+      border-radius: 16px;
+      background: linear-gradient(180deg, rgba(14,31,58,.78), rgba(5,13,29,.7));
+      box-shadow: inset 3px 0 0 rgba(96,165,250,.62), 0 16px 48px rgba(2,6,23,.22);
+    }
+    .task-detail-inline h2 { margin: 0 0 10px; font-size: 15px; color: #dbeafe; }
+    .task-detail-inline .metric-grid { grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; }
+    .task-detail-inline .metric-card { padding: 10px; border-radius: 12px; }
+    .task-detail-inline .metric-card strong { margin-top: 4px; font-size: 16px; line-height: 1.25; }
+    .task-detail-inline .metric-card span { font-size: 11px; }
+    .task-detail-inline .worker-list { margin-top: 8px; }
     .progress-line { height: 9px; border-radius: 999px; background: rgba(96,165,250,.14); overflow: hidden; margin: 12px 0; }
     .progress-line span { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--primary), var(--cyan)); }
     .panel { padding: 18px; margin-bottom: 14px; }
@@ -1017,12 +1030,11 @@ INDEX_HTML = r"""<!doctype html>
           </div>
           <div id="task-list" class="task-list" aria-label="任务列表"></div>
         </aside>
-        <section id="task-detail-panel" class="panel task-detail-panel hidden">
+        <section id="task-detail-panel" class="task-detail-panel task-detail-inline hidden">
           <h2>任务详情仪表盘</h2>
           <div class="metric-grid" id="dashboard-metrics"></div>
           <h2>活跃 Worker</h2>
           <div id="worker-list" class="worker-list"></div>
-          <pre id="task-output">等待任务状态...</pre>
           <div class="split">
             <label>上传线程 <input id="concurrency-upload" type="number" min="1" value="32"></label>
             <label>检查线程 <input id="concurrency-check" type="number" min="1" value="16"></label>
@@ -1158,6 +1170,14 @@ INDEX_HTML = r"""<!doctype html>
       browser: "目录浏览",
       logs: "日志 / 报告"
     };
+    const TASK_FILTER_LABELS = {
+      all: "全部任务",
+      running: "运行中",
+      paused: "暂停",
+      completed: "完成",
+      failed: "报错",
+      stalled: "卡住"
+    };
     const CONFIG_SECTION_TITLES = {
       UPLOAD: "传输策略",
       SCAN: "扫描策略",
@@ -1177,7 +1197,6 @@ INDEX_HTML = r"""<!doctype html>
       prefix: "Prefix"
     };
     const taskList = document.getElementById("task-list");
-    const taskOutput = document.getElementById("task-output");
     const dashboardMetrics = document.getElementById("dashboard-metrics");
     const workerList = document.getElementById("worker-list");
     const configForm = document.getElementById("config-form");
@@ -1205,6 +1224,7 @@ INDEX_HTML = r"""<!doctype html>
     let browserMode = "source";
     let browserHistory = [];
     let browserForward = [];
+    let taskDetailRequestId = 0;
 
     function showLogin(message) {
       localStorage.removeItem(AUTH_KEY);
@@ -1354,13 +1374,23 @@ INDEX_HTML = r"""<!doctype html>
       });
       tabs.querySelectorAll("[data-task-filter]").forEach(button => {
         const filter = button.dataset.taskFilter;
-        const label = button.textContent.replace(/\s+\d+$/, "");
+        const label = taskFilterLabel(filter, button);
         button.textContent = `${label} ${counts[filter] || 0}`;
+        button.dataset.label = label;
         button.classList.toggle("active", filter === taskFilter);
         button.setAttribute("aria-selected", filter === taskFilter ? "true" : "false");
       });
     }
+    function taskFilterLabel(filter, button) {
+      if (TASK_FILTER_LABELS[filter]) return TASK_FILTER_LABELS[filter];
+      if (button && button.dataset.label) return button.dataset.label;
+      return button ? button.textContent.replace(/\s+\d+$/, "") : "";
+    }
     function renderTasks(tasks) {
+      const detailPanel = document.getElementById("task-detail-panel");
+      if (detailPanel && detailPanel.parentElement === taskList) {
+        document.getElementById("dashboard").appendChild(detailPanel);
+      }
       taskList.innerHTML = "";
       const visibleTasks = tasks.filter(task => taskFilter === "all" || taskBucket(task) === taskFilter);
       if (!visibleTasks.length) {
@@ -1371,13 +1401,22 @@ INDEX_HTML = r"""<!doctype html>
         const percent = pct(task.dashboard && task.dashboard.percent);
         const card = document.createElement("article");
         card.className = "task-card" + (task.task_id === selectedTaskId ? " selected" : "");
+        card.dataset.taskId = task.task_id || "";
         card.innerHTML = `<h3>${task.name || task.task_id}</h3><p class="muted">${task.source || "未设置源"} → ${task.target || "未设置目标"}</p><div class="progress-line"><span style="width:${percent}%"></span></div><p>${task.state} · ${percent.toFixed(1)}% · 错误 ${(task.dashboard && task.dashboard.upload_errors) || 0}</p>`;
-        card.addEventListener("click", () => { selectedTaskId = task.task_id; loadTask(task.task_id); });
+        card.addEventListener("click", () => {
+          selectedTaskId = task.task_id;
+          renderTasks(allTasks);
+          setStatus("正在打开任务：" + (task.name || task.task_id));
+          loadTask(task.task_id).catch(error => setStatus(error.message));
+        });
         taskList.appendChild(card);
+        if (task.task_id === selectedTaskId) attachTaskDetailPanel(card);
       });
     }
     async function loadTask(taskId) {
+      const requestId = ++taskDetailRequestId;
       const data = await api("/api/tasks/" + taskId);
+      if (requestId !== taskDetailRequestId || selectedTaskId !== taskId) return;
       renderTask(data.task);
       if (currentPage() === "logs") loadTaskLog(taskId).catch(error => taskLogOutput.textContent = error.message);
     }
@@ -1410,27 +1449,31 @@ INDEX_HTML = r"""<!doctype html>
       ];
       dashboardMetrics.innerHTML = metrics.map(([k, v]) => `<div class="metric-card"><span>${k}</span><strong>${v}</strong></div>`).join("");
       workerList.innerHTML = (d.active_workers || []).map(w => `<div class="worker-item">${w.stage || ""} ${w.worker_name || ""} ${w.detail || ""}<br>${w.task_summary || ""}</div>`).join("") || "<p class='muted'>暂无活跃 Worker</p>";
-      taskOutput.textContent = JSON.stringify(task, null, 2);
       renderConcurrency(task.concurrency || {});
       showTaskDetailPanel();
       setStatus("任务状态已更新");
     }
     function showTaskDetailPanel() {
       document.getElementById("task-detail-panel").classList.remove("hidden");
+      const card = Array.from(taskList.querySelectorAll(".task-card")).find(item => item.dataset.taskId === selectedTaskId);
+      attachTaskDetailPanel(card);
       updateDashboardLayout();
     }
     function hideTaskDetailPanel() {
       document.getElementById("task-detail-panel").classList.add("hidden");
       dashboardMetrics.innerHTML = "";
       workerList.innerHTML = "";
-      taskOutput.textContent = "";
       updateDashboardLayout();
+    }
+    function attachTaskDetailPanel(card) {
+      const panel = document.getElementById("task-detail-panel");
+      if (!panel || !card || panel.previousElementSibling === card) return;
+      card.insertAdjacentElement("afterend", panel);
     }
     function updateDashboardLayout() {
       const dashboard = document.getElementById("dashboard");
       const hasDetail = !document.getElementById("task-detail-panel").classList.contains("hidden");
       dashboard.classList.toggle("task-grid-full", !hasDetail);
-      dashboard.classList.toggle("task-grid-has-detail", hasDetail);
     }
     function syncLogTaskSelect(tasks) {
       if (!logTaskSelect) return;
@@ -1498,7 +1541,6 @@ INDEX_HTML = r"""<!doctype html>
     function showNoTaskSelected() {
       const message = "请先点击“新增任务”创建任务，或从任务列表选择一个任务。";
       setStatus(message);
-      if (taskOutput) taskOutput.textContent = message;
       hideTaskDetailPanel();
     }
     async function taskAction(action) {

@@ -662,6 +662,10 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertNotIn("目标端配置</option>", html)
         self.assertNotIn("暂无保存的存储位置", html)
         self.assertNotIn("未命名存储位置", html)
+        self.assertNotIn("taskOutput.textContent = JSON.stringify(task", html)
+        self.assertNotIn('id="task-output"', html)
+        self.assertNotIn('class="panel task-detail-panel hidden"', html)
+        self.assertNotIn("task-grid-has-detail", html)
         for label in (
             "配置中心",
             "配置已加载",
@@ -748,9 +752,10 @@ class WebConsoleServerTests(unittest.TestCase):
             'function updateDashboardLayout',
             'id="task-state-tabs"',
             'id="task-detail-panel"',
-            'class="panel task-detail-panel hidden"',
+            'class="task-detail-panel task-detail-inline hidden"',
             'function showTaskDetailPanel',
             'function hideTaskDetailPanel',
+            'function attachTaskDetailPanel',
             'if (selectedTaskId && allTasks.some',
             'class="task-editor hidden"',
             'id="new-task-source-profile"',
@@ -787,6 +792,7 @@ class WebConsoleServerTests(unittest.TestCase):
             'function loadTaskLog',
             'function loadBrowserProfiles',
             'function renderTaskFilters',
+            'function taskFilterLabel',
             'class="explorer-tree"',
             'data-page="dashboard"',
             'data-page="config"',
