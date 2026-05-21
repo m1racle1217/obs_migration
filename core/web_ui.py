@@ -478,7 +478,7 @@ INDEX_HTML = r"""<!doctype html>
     button {
       min-height: 42px;
       border: 1px solid rgba(255,255,255,.08);
-      border-radius: 999px;
+      border-radius: 12px;
       padding: 0 16px;
       font-weight: 680;
       cursor: pointer;
@@ -617,6 +617,33 @@ INDEX_HTML = r"""<!doctype html>
     .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
     .top h1 { font-size: clamp(28px, 3vw, 34px); letter-spacing: -.04em; line-height: 1.08; margin: 12px 0 0; }
     .actions, .toolbar { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+    .dashboard-overview {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(112px, 1fr));
+      gap: 10px;
+      min-width: min(680px, 58vw);
+    }
+    .overview-cell {
+      min-height: 74px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 12px 14px;
+      background: rgba(255,255,255,.035);
+      box-shadow: 0 18px 56px rgba(0,0,0,.2);
+    }
+    .overview-cell span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.3;
+    }
+    .overview-cell strong {
+      display: block;
+      margin-top: 8px;
+      color: var(--text);
+      font-size: 20px;
+      letter-spacing: -.03em;
+    }
     .status-pill {
       display: inline-flex;
       gap: 8px;
@@ -624,7 +651,7 @@ INDEX_HTML = r"""<!doctype html>
       border: 1px solid rgba(255,255,255,.11);
       background: rgba(255,255,255,.05);
       color: var(--primary-strong);
-      border-radius: 999px;
+      border-radius: 12px;
       padding: 8px 12px;
       font-size: 12px;
       font-weight: 800;
@@ -638,7 +665,7 @@ INDEX_HTML = r"""<!doctype html>
     }
     .task-state-tabs button, .log-tabs button {
       min-height: 38px;
-      border-radius: 13px;
+      border-radius: 11px;
       padding: 0 10px;
       color: var(--soft);
       background: rgba(255,255,255,.035);
@@ -724,7 +751,7 @@ INDEX_HTML = r"""<!doctype html>
     }
     .config-tab {
       min-height: 38px;
-      border-radius: 13px;
+      border-radius: 11px;
       padding: 0 14px;
       color: var(--soft);
       background: transparent;
@@ -810,7 +837,7 @@ INDEX_HTML = r"""<!doctype html>
       display: inline-flex;
       align-items: center;
       border: 1px solid var(--line);
-      border-radius: 999px;
+      border-radius: 12px;
       padding: 0 13px;
       color: var(--soft);
       text-decoration: none;
@@ -1072,6 +1099,8 @@ INDEX_HTML = r"""<!doctype html>
       .login-card, .app-shell, .task-grid, .split { grid-template-columns: 1fr; }
       .login-hero { min-height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
       .sidebar { position: relative; height: auto; }
+      .top { display: grid; }
+      .dashboard-overview { min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .browser-window { min-height: 560px; }
       .explorer-addressbar, .explorer-layout { grid-template-columns: 1fr; }
       .explorer-tree { border-right: 0; border-bottom: 1px solid rgba(96,165,250,.16); }
@@ -1105,10 +1134,11 @@ INDEX_HTML = r"""<!doctype html>
     </aside>
     <main class="main">
       <div class="top">
-        <div>
-          <span class="status-pill">Standby · idle</span>
-          <h1>并行多任务控制台</h1>
-          <p class="muted">暗蓝科技风控制面：新增任务、独立启动、独立暂停、运行中调并发。</p>
+        <div class="dashboard-overview" aria-label="任务运行概览">
+          <div class="overview-cell"><span>任务总数</span><strong id="overview-total">0</strong></div>
+          <div class="overview-cell"><span>运行中</span><strong id="overview-running">0</strong></div>
+          <div class="overview-cell"><span>需要处理</span><strong id="overview-attention">0</strong></div>
+          <div class="overview-cell"><span>当前状态</span><strong id="overview-state">待命</strong></div>
         </div>
         <div class="actions">
           <button id="refresh-tasks" type="button">刷新状态</button>
@@ -1542,6 +1572,21 @@ INDEX_HTML = r"""<!doctype html>
         button.dataset.label = label;
         button.classList.toggle("active", filter === taskFilter);
         button.setAttribute("aria-selected", filter === taskFilter ? "true" : "false");
+      });
+      renderDashboardOverview(counts);
+    }
+    function renderDashboardOverview(counts) {
+      const attention = (counts.failed || 0) + (counts.stalled || 0) + (counts.paused || 0);
+      const state = counts.running > 0 ? "迁移中" : attention > 0 ? "待处理" : counts.all > 0 ? "已待命" : "待命";
+      const values = {
+        "overview-total": counts.all || 0,
+        "overview-running": counts.running || 0,
+        "overview-attention": attention,
+        "overview-state": state,
+      };
+      Object.entries(values).forEach(([id, value]) => {
+        const node = document.getElementById(id);
+        if (node) node.textContent = value;
       });
     }
     function taskFilterLabel(filter, button) {

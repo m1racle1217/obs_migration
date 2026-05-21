@@ -790,6 +790,9 @@ class WebConsoleServerTests(unittest.TestCase):
             "<h2>登录</h2>",
             "默认：admin",
             "默认是 admin / admin",
+            "任务运行概览",
+            "任务总数",
+            "需要处理",
             "新增任务",
             "选择源位置预设",
             "选择目标位置预设",
@@ -965,6 +968,7 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertIn("linear-gradient(135deg, rgba(96,165,250,.28)", html)
         self.assertIn("font-size: 13px;", html)
         button_block = html.split("button {", 1)[1].split("}", 1)[0]
+        self.assertIn("border-radius: 12px;", button_block)
         self.assertIn("background: rgba(255,255,255,.035);", button_block)
         primary_block = html.split("button.primary {", 1)[1].split("}", 1)[0]
         self.assertNotIn("#eff6ff", primary_block)
