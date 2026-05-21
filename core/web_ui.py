@@ -940,7 +940,7 @@ INDEX_HTML = r"""<!doctype html>
     <aside class="sidebar">
       <div class="brand"><div class="mark">OBS</div><div><strong>OBS Migration</strong><small>Blue Operations Node</small></div></div>
       <nav class="nav" aria-label="主导航">
-        <a href="#dashboard">任务仪表盘</a>
+        <a href="#dashboard">任务列表</a>
         <a href="#config">配置中心</a>
         <a href="#browser">目录浏览</a>
         <a href="#logs">日志 / 报告</a>
@@ -990,8 +990,8 @@ INDEX_HTML = r"""<!doctype html>
           </div>
           <div id="task-list" class="task-list" aria-label="任务列表"></div>
         </aside>
-        <section id="task-detail-panel" class="panel">
-          <h2>任务仪表盘</h2>
+        <section id="task-detail-panel" class="panel task-detail-panel hidden">
+          <h2>任务详情仪表盘</h2>
           <div class="metric-grid" id="dashboard-metrics"></div>
           <h2>活跃 Worker</h2>
           <div id="worker-list" class="worker-list"></div>
@@ -1130,7 +1130,7 @@ INDEX_HTML = r"""<!doctype html>
     const authMessage = document.getElementById("auth-message");
     const NAV_PAGES = new Set(["dashboard", "config", "browser", "logs"]);
     const PAGE_TITLES = {
-      dashboard: "任务仪表盘",
+      dashboard: "任务列表",
       config: "配置中心",
       browser: "目录浏览",
       logs: "日志 / 报告"
@@ -1154,6 +1154,7 @@ INDEX_HTML = r"""<!doctype html>
     const browserContext = document.getElementById("browser-context");
     const browserModeNote = document.getElementById("browser-mode-note");
     let selectedTaskId = null;
+    let selectedLogTaskId = null;
     let allTasks = [];
     let taskFilter = "all";
     let logTab = "log";
@@ -1302,8 +1303,12 @@ INDEX_HTML = r"""<!doctype html>
       renderTaskFilters(allTasks);
       renderTasks(allTasks);
       syncLogTaskSelect(allTasks);
-      if (!selectedTaskId && allTasks[0]) selectedTaskId = allTasks[0].task_id;
-      if (selectedTaskId) await loadTask(selectedTaskId);
+      if (selectedTaskId && allTasks.some(task => task.task_id === selectedTaskId)) {
+        await loadTask(selectedTaskId);
+      } else {
+        selectedTaskId = null;
+        hideTaskDetailPanel();
+      }
     }
     function taskBucket(task) {
       const state = String(task.state || "").toLowerCase();
@@ -1384,11 +1389,21 @@ INDEX_HTML = r"""<!doctype html>
       workerList.innerHTML = (d.active_workers || []).map(w => `<div class="worker-item">${w.stage || ""} ${w.worker_name || ""} ${w.detail || ""}<br>${w.task_summary || ""}</div>`).join("") || "<p class='muted'>暂无活跃 Worker</p>";
       taskOutput.textContent = JSON.stringify(task, null, 2);
       renderConcurrency(task.concurrency || {});
+      showTaskDetailPanel();
       setStatus("任务状态已更新");
+    }
+    function showTaskDetailPanel() {
+      document.getElementById("task-detail-panel").classList.remove("hidden");
+    }
+    function hideTaskDetailPanel() {
+      document.getElementById("task-detail-panel").classList.add("hidden");
+      dashboardMetrics.innerHTML = "";
+      workerList.innerHTML = "";
+      taskOutput.textContent = "";
     }
     function syncLogTaskSelect(tasks) {
       if (!logTaskSelect) return;
-      const current = logTaskSelect.value || selectedTaskId || "";
+      const current = logTaskSelect.value || selectedLogTaskId || selectedTaskId || "";
       logTaskSelect.innerHTML = "";
       if (!tasks.length) {
         const option = document.createElement("option");
@@ -1405,7 +1420,7 @@ INDEX_HTML = r"""<!doctype html>
       });
       const exists = tasks.some(task => task.task_id === current);
       logTaskSelect.value = exists ? current : tasks[0].task_id;
-      if (!selectedTaskId && logTaskSelect.value) selectedTaskId = logTaskSelect.value;
+      selectedLogTaskId = logTaskSelect.value || null;
     }
     function renderLogTab() {
       document.querySelectorAll("[data-log-tab]").forEach(button => {
@@ -1416,7 +1431,7 @@ INDEX_HTML = r"""<!doctype html>
       if (taskLogOutput) taskLogOutput.classList.toggle("hidden", logTab !== "log");
       if (taskReportOutput) taskReportOutput.classList.toggle("hidden", logTab !== "report");
     }
-    async function loadTaskLog(taskId = selectedTaskId) {
+    async function loadTaskLog(taskId = selectedLogTaskId || selectedTaskId) {
       if (!taskLogOutput || !taskLogMeta) return;
       taskId = (logTaskSelect && logTaskSelect.value) || taskId;
       if (!taskId) {
@@ -1425,7 +1440,7 @@ INDEX_HTML = r"""<!doctype html>
         if (taskReportOutput) taskReportOutput.textContent = "请先选择一个任务。";
         return;
       }
-      selectedTaskId = taskId;
+      selectedLogTaskId = taskId;
       const data = await api(`/api/tasks/${taskId}/logs?max_bytes=65536`);
       const log = data.log || {};
       taskLogMeta.innerHTML = [
@@ -1453,6 +1468,7 @@ INDEX_HTML = r"""<!doctype html>
       const message = "请先点击“新增任务”创建任务，或从任务列表选择一个任务。";
       setStatus(message);
       if (taskOutput) taskOutput.textContent = message;
+      hideTaskDetailPanel();
     }
     async function taskAction(action) {
       if (!selectedTaskId) {
@@ -1861,8 +1877,8 @@ INDEX_HTML = r"""<!doctype html>
     });
     if (logTaskSelect) {
       logTaskSelect.addEventListener("change", () => {
-        selectedTaskId = logTaskSelect.value || selectedTaskId;
-        loadTaskLog(selectedTaskId).catch(error => taskLogOutput.textContent = error.message);
+        selectedLogTaskId = logTaskSelect.value || selectedLogTaskId;
+        loadTaskLog(selectedLogTaskId).catch(error => taskLogOutput.textContent = error.message);
       });
     }
     document.getElementById("new-task-button").addEventListener("click", () => {
