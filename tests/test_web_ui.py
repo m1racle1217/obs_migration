@@ -701,6 +701,7 @@ class WebConsoleServerTests(unittest.TestCase):
                 "role": "source",
                 "type": "local",
                 "path": "D:\\data",
+                "paths": ["D:\\data", "E:\\archive"],
             },
             {
                 "id": "target-prod",
@@ -711,6 +712,7 @@ class WebConsoleServerTests(unittest.TestCase):
                 "endpoint": "https://obs.example.com",
                 "bucket": "prod-bucket",
                 "prefix": "root/out",
+                "prefixes": ["root/out", "root/archive"],
             },
         ]
 
@@ -722,8 +724,10 @@ class WebConsoleServerTests(unittest.TestCase):
 
         status, data, _headers = client.request("GET", "/api/browser/profiles")
         self.assertEqual(status, 200)
+        self.assertEqual(data["profiles"][0]["paths"], ["D:\\data", "E:\\archive"])
         self.assertEqual(data["profiles"][1]["endpoint"], "https://obs.example.com")
         self.assertEqual(data["profiles"][1]["bucket"], "prod-bucket")
+        self.assertEqual(data["profiles"][1]["prefixes"], ["root/out", "root/archive"])
 
     def test_default_remote_browser_profiles_include_endpoint(self):
         cfg = make_config(require_login=False)
@@ -739,6 +743,8 @@ class WebConsoleServerTests(unittest.TestCase):
         profiles = {item["id"]: item for item in data["profiles"]}
         self.assertEqual(profiles["source-default"]["endpoint"], "https://source.obs.example.com")
         self.assertEqual(profiles["target-default"]["endpoint"], "https://target.obs.example.com")
+        self.assertIn("prefixes", profiles["source-default"])
+        self.assertIn("prefixes", profiles["target-default"])
 
     def test_static_page_contains_shell_labels(self):
         _server, client, _saved, _cfg = self.make_server()
@@ -927,6 +933,7 @@ class WebConsoleServerTests(unittest.TestCase):
             'id="browser-profile-select"',
             'id="browser-profile-empty"',
             'function selectedBrowserProfile',
+            'function selectedBrowserItemList',
             'function browserProfileScope',
             'id="browser-save-profile"',
             'id="browser-go"',
@@ -937,6 +944,8 @@ class WebConsoleServerTests(unittest.TestCase):
             'id="log-task-select"',
             'id="log-tab-log"',
             'id="log-tab-report"',
+            'class="log-control-group"',
+            'class="log-control-caption"',
             'id="task-report-output"',
             'id="task-log-downloads"',
             'download>',
@@ -1018,10 +1027,21 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertIn("function compactCount", html)
         self.assertIn("满 · ${waiting}等待", html)
         self.assertNotIn('未完成 ${unfinished}', html)
+        log_controls_block = html.split(".log-controls {", 1)[1].split("}", 1)[0]
+        self.assertIn("align-items: end", log_controls_block)
+        self.assertIn("minmax(220px, 320px)", log_controls_block)
+        log_group_block = html.split(".log-controls label, .log-control-group {", 1)[1].split("}", 1)[0]
+        self.assertIn("align-self: end", log_group_block)
+        self.assertIn("gap: 8px", log_group_block)
+        log_tabs_block = html.split("\n    .log-control-group .log-tabs {", 1)[1].split("}", 1)[0]
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr))", log_tabs_block)
+        self.assertIn("margin: 0", log_tabs_block)
+        self.assertIn(".log-controls { grid-template-columns: 1fr; }", html)
         preset_group_header_block = html.split(".preset-group-header {", 1)[1].split("}", 1)[0]
         self.assertIn("align-items: center", preset_group_header_block)
         self.assertIn("line-height: 1.2", preset_group_header_block)
         self.assertIn(".preset-group-header span", html)
+        self.assertIn(".preset-path-list", html)
         self.assertIn('[data-task-filter="running"]', html)
         self.assertIn("#batch-delete-tasks { --button-rgb", html)
         primary_block = html.split("button.primary {", 1)[1].split("}", 1)[0]
@@ -1075,7 +1095,13 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertNotIn("function fillSelectedTaskConfig", html)
         self.assertNotIn("function setTargetDirectoryFromBrowser", html)
         self.assertIn("function firstSelectedBrowserItem", html)
-        self.assertIn("const selectedItem = firstSelectedBrowserItem()", html)
+        self.assertIn("function selectedBrowserItemList", html)
+        self.assertIn("const selectedItem = selectedItems[0] || null", html)
+        self.assertIn("const selectedPaths = selectedItems.map", html)
+        self.assertIn('paths: loc.scope === "local" ? selectedPaths : []', html)
+        self.assertIn('prefixes: loc.scope === "local" ? [] : selectedPaths', html)
+        self.assertIn("function profilePathList", html)
+        self.assertIn("function formatPresetPathList", html)
         self.assertIn('if (defaults.endpoint !== undefined)', html)
         self.assertIn('endpoint: profile ? profile.endpoint || "" : ""', html)
         nav_link_block = html.split(".nav a {", 1)[1].split("}", 1)[0]

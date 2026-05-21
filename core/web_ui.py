@@ -993,7 +993,37 @@ INDEX_HTML = r"""<!doctype html>
       flex-wrap: wrap;
       margin-bottom: 12px;
     }
-    .log-controls { display: grid; grid-template-columns: minmax(220px, 360px) 1fr; gap: 12px; align-items: end; margin: 12px 0; }
+    .log-controls {
+      display: grid;
+      grid-template-columns: minmax(220px, 360px) minmax(220px, 320px);
+      gap: 12px;
+      align-items: end;
+      margin: 12px 0;
+    }
+    .log-controls label, .log-control-group {
+      display: grid;
+      gap: 8px;
+      align-self: end;
+      min-width: 0;
+    }
+    .log-control-caption {
+      min-height: 16px;
+      color: var(--soft);
+      font-size: 13px;
+      font-weight: 640;
+      line-height: 1.2;
+    }
+    .log-controls select, .log-control-group .log-tabs {
+      min-height: 44px;
+    }
+    .log-control-group .log-tabs {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: stretch;
+      margin: 0;
+    }
+    .log-control-group .log-tabs button {
+      min-height: 44px;
+    }
     .log-meta {
       display: grid;
       gap: 6px;
@@ -1244,6 +1274,12 @@ INDEX_HTML = r"""<!doctype html>
     .preset-detail-grid { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 7px 10px; }
     .preset-detail-grid dt { margin: 0; color: #93c5fd; font-weight: 850; }
     .preset-detail-grid dd { margin: 0; word-break: break-all; }
+    .preset-path-list {
+      display: grid;
+      gap: 4px;
+      margin: 0;
+      padding-left: 18px;
+    }
     .preset-actions { display: flex; gap: 8px; align-items: center; }
     .preset-actions button { min-height: 32px; border-radius: 9px; padding: 0 10px; font-size: 12px; }
     .modal-backdrop {
@@ -1406,6 +1442,7 @@ INDEX_HTML = r"""<!doctype html>
       .dashboard-overview { min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .browser-window { min-height: 560px; }
       .explorer-commandbar, .explorer-addressbar, .explorer-layout { grid-template-columns: 1fr; }
+      .log-controls { grid-template-columns: 1fr; }
       .inline-select { min-width: 0; }
       .explorer-tree { border-right: 0; border-bottom: 1px solid rgba(96,165,250,.16); }
     }
@@ -1610,9 +1647,12 @@ INDEX_HTML = r"""<!doctype html>
           <label>选择任务
             <select id="log-task-select"></select>
           </label>
-          <div id="log-tabs" class="log-tabs" role="tablist" aria-label="日志和报告">
-            <button id="log-tab-log" class="active" type="button" data-log-tab="log">日志</button>
-            <button id="log-tab-report" type="button" data-log-tab="report">报告</button>
+          <div class="log-control-group">
+            <span class="log-control-caption">查看内容</span>
+            <div id="log-tabs" class="log-tabs" role="tablist" aria-label="日志和报告">
+              <button id="log-tab-log" class="active" type="button" data-log-tab="log">日志</button>
+              <button id="log-tab-report" type="button" data-log-tab="report">报告</button>
+            </div>
           </div>
         </div>
         <div id="task-log-meta" class="log-meta">
@@ -2570,15 +2610,17 @@ INDEX_HTML = r"""<!doctype html>
       const roleText = normalizedProfileRole(profile) === "source" ? "源端" : normalizedProfileRole(profile) === "target" ? "目的端" : "通用";
       const typeValue = String(profile.type || "local").toLowerCase();
       const isLocalProfile = typeValue === "local";
+      const localPaths = profilePathList(profile, "paths", "path");
+      const remotePrefixes = profilePathList(profile, "prefixes", "prefix");
       const detailRows = isLocalProfile
         ? `<dt>用途</dt><dd>${escapeHtml(roleText)}</dd>
                <dt>类型</dt><dd>LOCAL</dd>
-               <dt>本地路径</dt><dd>${escapeHtml(profile.path || "-")}</dd>`
+               <dt>本地路径</dt><dd>${formatPresetPathList(localPaths)}</dd>`
         : `<dt>用途</dt><dd>${escapeHtml(roleText)}</dd>
                <dt>类型</dt><dd>${escapeHtml(String(profile.type || "remote").toUpperCase())}</dd>
                <dt>Endpoint</dt><dd>${escapeHtml(profile.endpoint || "-")}</dd>
                <dt>Bucket</dt><dd>${escapeHtml(profile.bucket || "-")}</dd>
-               <dt>Prefix</dt><dd>${escapeHtml(profile.prefix || "-")}</dd>`;
+               <dt>Prefix</dt><dd>${formatPresetPathList(remotePrefixes)}</dd>`;
       card.innerHTML = `
         <div class="preset-card-main">
           <strong>${escapeHtml(formatBrowserProfileLabel(profile))}</strong>
@@ -2607,6 +2649,16 @@ INDEX_HTML = r"""<!doctype html>
     function togglePresetCard(profileId) {
       expandedPresetId = expandedPresetId === profileId ? null : profileId;
       renderPositionPresetManager();
+    }
+    function profilePathList(profile, listKey, singleKey) {
+      const values = Array.isArray(profile && profile[listKey]) ? profile[listKey] : [];
+      const fallback = profile && profile[singleKey] ? [profile[singleKey]] : [];
+      return Array.from(new Set(values.concat(fallback).map(value => String(value || "").trim()).filter(Boolean)));
+    }
+    function formatPresetPathList(values) {
+      if (!values.length) return "-";
+      if (values.length === 1) return escapeHtml(values[0]);
+      return `<ul class="preset-path-list">${values.map(value => `<li>${escapeHtml(value)}</li>`).join("")}</ul>`;
     }
     async function deletePositionPreset(profileId) {
       const profile = browserProfiles.find(item => item.id === profileId);
@@ -2643,16 +2695,23 @@ INDEX_HTML = r"""<!doctype html>
       }
       const type = document.getElementById("position-preset-type").value;
       const role = document.getElementById("position-preset-role").value;
+      const form = document.getElementById("position-preset-form");
+      const pendingPaths = parsePresetDefaultList(form.dataset.paths);
+      const pendingPrefixes = parsePresetDefaultList(form.dataset.prefixes);
+      const pathValue = document.getElementById("position-preset-path").value.trim();
+      const prefixValue = document.getElementById("position-preset-prefix").value.trim();
       const profile = {
         id: "profile-" + Date.now(),
         name,
         role,
         type,
         section: role === "target" ? "TARGET" : "SOURCE",
-        path: type === "local" ? document.getElementById("position-preset-path").value.trim() : "",
+        path: type === "local" ? pathValue : "",
+        paths: type === "local" ? mergePresetValues(pendingPaths, pathValue) : [],
         endpoint: type === "local" ? "" : document.getElementById("position-preset-endpoint").value.trim(),
         bucket: type === "local" ? "" : document.getElementById("position-preset-bucket").value.trim(),
-        prefix: type === "local" ? "" : document.getElementById("position-preset-prefix").value.trim(),
+        prefix: type === "local" ? "" : prefixValue,
+        prefixes: type === "local" ? [] : mergePresetValues(pendingPrefixes, prefixValue),
         ak: type === "local" ? "" : document.getElementById("position-preset-ak").value.trim(),
         sk: type === "local" ? "" : document.getElementById("position-preset-sk").value
       };
@@ -2672,8 +2731,23 @@ INDEX_HTML = r"""<!doctype html>
       closePositionPresetModal();
       setConfigOutput("位置预设已保存。");
     }
+    function parsePresetDefaultList(raw) {
+      try {
+        const values = JSON.parse(raw || "[]");
+        return Array.isArray(values) ? values.map(value => String(value || "").trim()).filter(Boolean) : [];
+      } catch (_error) {
+        return [];
+      }
+    }
+    function mergePresetValues(values, fallback) {
+      const merged = Array.from(new Set(values.concat([fallback || ""]).map(value => String(value || "").trim()).filter(Boolean)));
+      return merged;
+    }
     function openPositionPresetModal(defaults = {}) {
       document.getElementById("position-preset-modal").classList.remove("hidden");
+      const form = document.getElementById("position-preset-form");
+      form.dataset.paths = JSON.stringify(defaults.paths || []);
+      form.dataset.prefixes = JSON.stringify(defaults.prefixes || []);
       if (defaults.name !== undefined) document.getElementById("position-preset-name").value = defaults.name || "";
       if (defaults.role) document.getElementById("position-preset-role").value = defaults.role;
       if (defaults.type) document.getElementById("position-preset-type").value = defaults.type;
@@ -2688,6 +2762,11 @@ INDEX_HTML = r"""<!doctype html>
     }
     function closePositionPresetModal() {
       document.getElementById("position-preset-modal").classList.add("hidden");
+      const form = document.getElementById("position-preset-form");
+      if (form) {
+        delete form.dataset.paths;
+        delete form.dataset.prefixes;
+      }
     }
     async function saveConfig() {
       await api("/api/config", {
@@ -2713,7 +2792,12 @@ INDEX_HTML = r"""<!doctype html>
       return browserProfiles.find(profile => profile.id === profileId) || null;
     }
     function firstSelectedBrowserItem() {
-      return Array.from(selectedBrowserItems.values())[0] || selectedBrowserItem || null;
+      return selectedBrowserItemList()[0] || null;
+    }
+    function selectedBrowserItemList() {
+      const checked = Array.from(selectedBrowserItems.values());
+      if (checked.length) return checked;
+      return selectedBrowserItem ? [selectedBrowserItem] : [];
     }
     function browserProfileScope(profile) {
       if (!profile) return "local";
@@ -2827,11 +2911,19 @@ INDEX_HTML = r"""<!doctype html>
     }
     function browserProfilePath(profile) {
       if (!profile) return "";
+      const paths = profilePathList(profile, "paths", "path");
+      const prefixes = profilePathList(profile, "prefixes", "prefix");
+      if (paths.length > 1) return `${paths[0]} 等 ${paths.length} 个路径`;
+      if (prefixes.length > 1) return `${[profile.bucket, prefixes[0]].filter(Boolean).join("/")} 等 ${prefixes.length} 个 Prefix`;
       if (profile.path) return profile.path;
       return [profile.bucket, profile.prefix].filter(Boolean).join("/");
     }
     function browserProfileTaskPath(profile) {
       if (!profile) return "";
+      const paths = profilePathList(profile, "paths", "path");
+      const prefixes = profilePathList(profile, "prefixes", "prefix");
+      if (paths.length) return paths[0];
+      if (prefixes.length) return prefixes[0];
       return profile.path || profile.prefix || "";
     }
     function applyTaskProfile(role, profileId) {
@@ -2855,11 +2947,13 @@ INDEX_HTML = r"""<!doctype html>
     async function saveCurrentBrowserProfile() {
       const loc = browserLocation();
       const profile = selectedBrowserProfile();
-      const selectedItem = firstSelectedBrowserItem();
+      const selectedItems = selectedBrowserItemList();
+      const selectedItem = selectedItems[0] || null;
+      const selectedPaths = selectedItems.map(item => item.path || item.name || "").filter(Boolean);
       let path = loc.path;
       let bucket = loc.bucket;
       if (selectedItem) {
-        const selectedPath = selectedItem.path || selectedItem.name || "";
+        const selectedPath = selectedPaths[0] || "";
         if (loc.scope === "local") {
           path = selectedPath || path;
         } else if (selectedItem.kind === "bucket") {
@@ -2871,13 +2965,15 @@ INDEX_HTML = r"""<!doctype html>
       }
       const displayName = bucket ? [bucket, path].filter(Boolean).join("/") : path;
       openPositionPresetModal({
-        name: `${loc.scope} ${displayName || "root"}`,
+        name: `${loc.scope} ${displayName || "root"}${selectedPaths.length > 1 ? ` 等 ${selectedPaths.length} 个` : ""}`,
         role: loc.scope === "TARGET" ? "target" : "source",
         type: loc.scope === "local" ? "local" : "remote",
         path: loc.scope === "local" ? path : "",
+        paths: loc.scope === "local" ? selectedPaths : [],
         endpoint: profile ? profile.endpoint || "" : "",
         bucket: loc.scope === "local" ? "" : bucket || "",
         prefix: loc.scope === "local" ? "" : path,
+        prefixes: loc.scope === "local" ? [] : selectedPaths,
         ak: profile ? profile.ak || "" : "",
         sk: profile ? profile.sk || "" : ""
       });
@@ -3724,8 +3820,10 @@ def _default_browser_profiles(cfg):
                 "type": "local" if source_type == "local" else "remote",
                 "section": "SOURCE",
                 "path": cfg.get("SOURCE", "path", fallback=""),
+                "paths": [cfg.get("SOURCE", "path", fallback="")] if cfg.get("SOURCE", "path", fallback="") else [],
                 "bucket": cfg.get("SOURCE", "bucket", fallback=""),
                 "prefix": cfg.get("SOURCE", "prefix", fallback=""),
+                "prefixes": [cfg.get("SOURCE", "prefix", fallback="")] if cfg.get("SOURCE", "prefix", fallback="") else [],
                 "endpoint": cfg.get("SOURCE", "endpoint", fallback=""),
             }
         )
@@ -3739,8 +3837,10 @@ def _default_browser_profiles(cfg):
                 "type": "local" if target_type == "local" else "remote",
                 "section": "TARGET",
                 "path": cfg.get("TARGET", "path", fallback=""),
+                "paths": [cfg.get("TARGET", "path", fallback="")] if cfg.get("TARGET", "path", fallback="") else [],
                 "bucket": cfg.get("TARGET", "bucket", fallback=""),
                 "prefix": cfg.get("TARGET", "prefix", fallback=""),
+                "prefixes": [cfg.get("TARGET", "prefix", fallback="")] if cfg.get("TARGET", "prefix", fallback="") else [],
                 "endpoint": cfg.get("TARGET", "endpoint", fallback=""),
             }
         )
@@ -3771,6 +3871,10 @@ def _normalize_browser_profiles(values):
         section = _safe_profile_text(item.get("section")).upper()
         if section not in {"SOURCE", "TARGET"}:
             section = "TARGET" if role == "target" else "SOURCE"
+        paths = _safe_profile_list(item.get("paths"))
+        prefixes = _safe_profile_list(item.get("prefixes"))
+        path = _safe_profile_text(item.get("path")) or (paths[0] if paths else "")
+        prefix = _safe_profile_text(item.get("prefix")) or (prefixes[0] if prefixes else "")
         profiles.append(
             {
                 "id": profile_id,
@@ -3778,9 +3882,11 @@ def _normalize_browser_profiles(values):
                 "role": role,
                 "type": profile_type,
                 "section": section,
-                "path": _safe_profile_text(item.get("path")),
+                "path": path,
+                "paths": paths or ([path] if path and profile_type == "local" else []),
                 "bucket": _safe_profile_text(item.get("bucket")),
-                "prefix": _safe_profile_text(item.get("prefix")),
+                "prefix": prefix,
+                "prefixes": prefixes or ([prefix] if prefix and profile_type != "local" else []),
                 "endpoint": _safe_profile_text(item.get("endpoint")),
                 "ak": _safe_profile_text(item.get("ak")),
                 "sk": _safe_profile_text(item.get("sk")),
@@ -3799,6 +3905,23 @@ def _find_browser_profile(cfg, profile_id):
 
 def _safe_profile_text(value):
     return str(value or "").strip()
+
+
+def _safe_profile_list(value):
+    if isinstance(value, list):
+        raw_items = value
+    elif isinstance(value, str):
+        raw_items = value.replace(";", "\n").splitlines()
+    else:
+        raw_items = []
+    items = []
+    seen = set()
+    for item in raw_items:
+        text = _safe_profile_text(item)
+        if text and text not in seen:
+            seen.add(text)
+            items.append(text)
+    return items
 
 
 def _file_ends_with_newline(file_path):
