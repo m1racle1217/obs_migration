@@ -1337,6 +1337,8 @@ INDEX_HTML = r"""<!doctype html>
     let taskDetailRequestId = 0;
     let expandedPresetId = null;
     let expandedPresetGroups = new Set(["source", "target", "both"]);
+    let pendingBatchDeleteSignature = "";
+    let pendingBatchDeleteTimer = null;
 
     function showLogin(message) {
       localStorage.removeItem(AUTH_KEY);
@@ -1762,7 +1764,22 @@ INDEX_HTML = r"""<!doctype html>
         setStatus("请先勾选要删除的任务。");
         return;
       }
-      if (!window.confirm(`确认删除 ${taskIds.length} 个任务？运行中的任务会先请求停止。`)) return;
+      const signature = taskIds.slice().sort().join("|");
+      if (pendingBatchDeleteSignature !== signature) {
+        pendingBatchDeleteSignature = signature;
+        if (pendingBatchDeleteTimer) window.clearTimeout(pendingBatchDeleteTimer);
+        pendingBatchDeleteTimer = window.setTimeout(() => {
+          pendingBatchDeleteSignature = "";
+          pendingBatchDeleteTimer = null;
+        }, 5000);
+        setStatus(`再次点击“批量删除”确认删除 ${taskIds.length} 个任务；运行中的任务会先请求停止。`);
+        return;
+      }
+      pendingBatchDeleteSignature = "";
+      if (pendingBatchDeleteTimer) {
+        window.clearTimeout(pendingBatchDeleteTimer);
+        pendingBatchDeleteTimer = null;
+      }
       for (const taskId of taskIds) {
         await deleteTask(taskId);
       }

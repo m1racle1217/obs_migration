@@ -309,7 +309,7 @@ class ReporterTests(unittest.TestCase):
                 pending_message="detected_but_not_migrated",
             )
 
-            with open(reporter.file, "r", encoding="utf-8") as fp:
+            with open(reporter.file, "r", encoding="utf-8-sig") as fp:
                 rows = list(csv.DictReader(fp))
 
             self.assertEqual(len(rows), 2)
@@ -341,6 +341,26 @@ class ReporterTests(unittest.TestCase):
             self.assertEqual(summary["SUCCESS"], 1)
             self.assertEqual(summary["INTERRUPTED"], 1)
             self.assertEqual(summary["TOTAL_FILES"], 2)
+
+    def test_reporter_csv_is_excel_friendly_utf8_sig(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            reporter = Reporter(tmp, "中文源")
+            reporter.write(
+                "E:/测试/文件.txt",
+                "obs://bucket/目标/文件.txt",
+                size=8,
+                status="SUCCESS",
+                msg="完成",
+            )
+            reporter.close()
+
+            raw = Path(reporter.file).read_bytes()
+            self.assertTrue(raw.startswith(b"\xef\xbb\xbf"))
+            with open(reporter.file, "r", encoding="utf-8-sig") as fp:
+                rows = list(csv.DictReader(fp))
+            self.assertEqual(rows[0]["source_path"], "E:/测试/文件.txt")
+            self.assertEqual(rows[0]["target_path"], "obs://bucket/目标/文件.txt")
+            self.assertEqual(rows[0]["message"], "完成")
 
 
 # ================================

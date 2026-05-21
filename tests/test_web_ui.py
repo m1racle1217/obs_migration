@@ -908,6 +908,17 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertIn(".log-textbox {", html)
         self.assertIn("overscroll-behavior: contain;", html)
 
+    def test_static_page_uses_inline_batch_delete_confirmation(self):
+        _server, client, _saved, _cfg = self.make_server()
+
+        status, html, _headers = client.request("GET", "/")
+
+        self.assertEqual(status, 200)
+        self.assertIn("pendingBatchDeleteSignature", html)
+        self.assertIn("再次点击“批量删除”确认删除", html)
+        batch_delete_block = html.split("async function batchDeleteTasks()", 1)[1].split("function concurrencyValue", 1)[0]
+        self.assertNotIn("window.confirm", batch_delete_block)
+
     def test_config_reload_returns_current_payload(self):
         _server, client, _saved, cfg = self.make_server()
         client.request("POST", "/api/login", {"username": "admin", "password": "secret"})

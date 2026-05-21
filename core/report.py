@@ -28,7 +28,7 @@ class Reporter:
         self.file = os.path.join(report_dir, f"{name}_{ts}.csv")
         self.summary_file = os.path.join(report_dir, f"{name}_{ts}_summary.json")
 
-        self.fp = open(self.file, "w", newline="", encoding="utf-8", errors="ignore")
+        self.fp = open(self.file, "w", newline="", encoding="utf-8-sig", errors="ignore")
         self.writer = csv.writer(self.fp)
         self.writer.writerow([
             "source_path",
