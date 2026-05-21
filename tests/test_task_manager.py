@@ -272,6 +272,64 @@ class MultiTaskManagerTests(unittest.TestCase):
         self.assertTrue(release.wait(timeout=1))
         self.assertTrue(manager.join(task_a, timeout=1))
 
+    def test_start_resumes_paused_task_from_checkpoint(self):
+        resumed = threading.Event()
+        release = threading.Event()
+
+        def runner(_cfg, controls):
+            controls.wait_if_paused(poll_interval=0.01)
+            resumed.set()
+            release.wait(timeout=1)
+
+        manager = MultiTaskManager(runner)
+        self.addCleanup(lambda: manager.stop_all())
+        task_id = manager.create_task(make_test_config("paused"), name="Paused Task")
+
+        self.assertTrue(manager.start(task_id))
+        self.assertTrue(manager.pause(task_id))
+
+        self.assertTrue(manager.start(task_id))
+        self.assertTrue(resumed.wait(timeout=1))
+        self.assertEqual(manager.snapshot(task_id)["state"], "running")
+        release.set()
+        self.assertTrue(manager.join(task_id, timeout=1))
+
+    def test_start_while_stopping_restarts_after_safe_stop(self):
+        run_count = 0
+        first_started = threading.Event()
+        restart_started = threading.Event()
+        release_first = threading.Event()
+        release_restart = threading.Event()
+
+        def runner(_cfg, controls):
+            nonlocal run_count
+            run_count += 1
+            if run_count == 1:
+                first_started.set()
+                while not controls.stop_requested():
+                    time.sleep(0.01)
+                release_first.wait(timeout=1)
+                return
+            restart_started.set()
+            release_restart.wait(timeout=1)
+
+        manager = MultiTaskManager(runner)
+        self.addCleanup(lambda: manager.stop_all())
+        task_id = manager.create_task(make_test_config("restart"), name="Restart Task")
+
+        self.assertTrue(manager.start(task_id))
+        self.assertTrue(first_started.wait(timeout=1))
+        self.assertTrue(manager.stop(task_id))
+        self.assertEqual(manager.snapshot(task_id)["state"], "stopping")
+
+        self.assertTrue(manager.start(task_id))
+        release_first.set()
+        self.assertTrue(restart_started.wait(timeout=1))
+        self.assertEqual(run_count, 2)
+
+        release_restart.set()
+        self.assertTrue(manager.join(task_id, timeout=1))
+
     def test_updates_concurrency_in_task_config_and_controls(self):
         manager = MultiTaskManager(lambda _cfg, _controls: None)
         task_id = manager.create_task(make_test_config("a"), name="Task A")

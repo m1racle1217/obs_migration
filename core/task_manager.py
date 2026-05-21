@@ -230,30 +230,44 @@ class ManagedMigrationTask:
         }
         self._lock = threading.Lock()
         self._concurrency = _extract_concurrency(self.cfg)
+        self._restart_after_stop = False
 
     def start(self):
+        notify_only = False
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
+                if self.controls is not None and self._state in {"pausing", "paused"}:
+                    self.controls.pause_event.clear()
+                    self._state = "running"
+                    notify_only = True
+                elif self.controls is not None and self._state == "stopping":
+                    self._restart_after_stop = True
+                    notify_only = True
+                else:
+                    return False
+            elif self._state in self.ACTIVE_STATES:
                 return False
-            if self._state in self.ACTIVE_STATES:
-                return False
-
-            self.controls = TaskControls()
-            self.controls.update_concurrency(**self._concurrency)
-            self.controls._on_change = self._notify_change
-            self._state = "starting"
-            self._error = None
-            self._timestamps["started_at"] = time.time()
-            self._timestamps["finished_at"] = None
-            self._thread = threading.Thread(
-                target=self._run,
-                args=(self.controls,),
-                daemon=True,
-                name=f"MigrationTask-{self.task_id}",
-            )
-            self._thread.start()
+            else:
+                self._launch_locked()
         self._notify_change()
         return True
+
+    def _launch_locked(self):
+        self._restart_after_stop = False
+        self.controls = TaskControls()
+        self.controls.update_concurrency(**self._concurrency)
+        self.controls._on_change = self._notify_change
+        self._state = "starting"
+        self._error = None
+        self._timestamps["started_at"] = time.time()
+        self._timestamps["finished_at"] = None
+        self._thread = threading.Thread(
+            target=self._run,
+            args=(self.controls,),
+            daemon=True,
+            name=f"MigrationTask-{self.task_id}",
+        )
+        self._thread.start()
 
     def _run(self, controls):
         self._mark_started(controls)
@@ -270,7 +284,12 @@ class ManagedMigrationTask:
         with self._lock:
             self._state = "stopped" if controls.stop_requested() else "completed"
             self._timestamps["finished_at"] = time.time()
+            should_restart = controls.stop_requested() and self._restart_after_stop
+            if should_restart:
+                self._thread = None
         self._notify_change()
+        if should_restart:
+            self.start()
 
     def pause(self):
         with self._lock:

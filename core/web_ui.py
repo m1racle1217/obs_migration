@@ -1669,12 +1669,7 @@ INDEX_HTML = r"""<!doctype html>
             </div>
           </div>
           <p>${escapeHtml(task.state || "unknown")} · ${percent.toFixed(1)}% · 错误 ${(task.dashboard && task.dashboard.upload_errors) || 0}</p>
-          <div class="task-card-actions" aria-label="任务控制">
-            <button class="primary task-action-start" type="button" data-task-action="start" data-task-id="${escapeHtml(taskId)}">启动</button>
-            <button type="button" data-task-action="pause" data-task-id="${escapeHtml(taskId)}">暂停</button>
-            <button type="button" data-task-action="resume" data-task-id="${escapeHtml(taskId)}">继续</button>
-            <button class="danger" type="button" data-task-action="stop" data-task-id="${escapeHtml(taskId)}">停止</button>
-          </div>`;
+          ${taskActionButtons(task, taskId)}`;
         const checkbox = card.querySelector(".task-check");
         checkbox.addEventListener("click", event => {
           event.stopPropagation();
@@ -1703,6 +1698,27 @@ INDEX_HTML = r"""<!doctype html>
         taskList.appendChild(card);
         if (task.task_id === selectedTaskId && taskDetailExpanded) attachTaskDetailPanel(card);
       });
+    }
+    function taskActionButtons(task, taskId) {
+      const state = String(task.state || "idle").toLowerCase();
+      const active = ["starting", "running", "pausing", "paused", "stopping"].includes(state);
+      const canStart = !["starting", "running", "pausing"].includes(state);
+      const canPause = ["starting", "running"].includes(state);
+      const canResume = ["pausing", "paused"].includes(state);
+      const canStop = active;
+      const startLabel = state === "paused" || state === "pausing"
+        ? "断点启动"
+        : state === "stopping"
+          ? "停止后重启"
+          : ["stopped", "completed", "failed"].includes(state)
+            ? "重新开始"
+            : "启动";
+      return `<div class="task-card-actions" aria-label="任务控制">
+        <button class="primary task-action-start" type="button" data-task-action="start" data-task-id="${escapeHtml(taskId)}" ${canStart ? "" : "disabled"}>${startLabel}</button>
+        <button type="button" data-task-action="pause" data-task-id="${escapeHtml(taskId)}" ${canPause ? "" : "disabled"}>暂停</button>
+        <button type="button" data-task-action="resume" data-task-id="${escapeHtml(taskId)}" ${canResume ? "" : "disabled"}>继续</button>
+        <button class="danger" type="button" data-task-action="stop" data-task-id="${escapeHtml(taskId)}" ${canStop ? "" : "disabled"}>停止</button>
+      </div>`;
     }
     async function loadTask(taskId) {
       const requestId = ++taskDetailRequestId;
@@ -1883,11 +1899,24 @@ INDEX_HTML = r"""<!doctype html>
         showNoTaskSelected();
         return;
       }
+      const beforeTask = allTasks.find(task => task.task_id === taskId) || {};
+      const beforeState = String(beforeTask.state || "").toLowerCase();
       selectedTaskId = taskId;
       taskDetailExpanded = true;
       const data = await api(`/api/tasks/${taskId}/${action}`, { method: "POST" });
       renderTask(data.task || data.status);
+      setStatus(taskActionFeedback(action, Boolean(data.result), beforeState));
       await loadTasks();
+    }
+    function taskActionFeedback(action, result, beforeState) {
+      if (!result) return "当前状态不能执行该操作，请等待任务状态刷新。";
+      if (action === "start" && ["paused", "pausing"].includes(beforeState)) return "已从断点继续任务。";
+      if (action === "start" && beforeState === "stopping") return "已登记：当前任务停止后会自动重新开始。";
+      if (action === "start" && ["stopped", "completed", "failed"].includes(beforeState)) return "已按断点重新开始任务。";
+      if (action === "pause") return "已请求暂停：正在停止领取新任务。";
+      if (action === "stop") return "已请求停止：正在清理等待队列。";
+      if (action === "resume") return "已继续任务。";
+      return "任务操作已提交。";
     }
     async function batchTaskAction(action) {
       const taskIds = checkedTaskIds();
