@@ -615,6 +615,24 @@ INDEX_HTML = r"""<!doctype html>
       font-weight: 800;
     }
     .task-grid { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 14px; align-items: start; }
+    .task-state-tabs, .log-tabs {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin: 12px 0;
+    }
+    .task-state-tabs button, .log-tabs button {
+      min-height: 38px;
+      border-radius: 11px;
+      padding: 0 10px;
+      color: var(--soft);
+      background: rgba(96,165,250,.07);
+      border-color: rgba(96,165,250,.16);
+    }
+    .task-state-tabs button.active, .log-tabs button.active {
+      color: #06111f;
+      background: linear-gradient(135deg, #eff6ff, #93c5fd 60%, #60a5fa);
+    }
     .task-list { display: grid; gap: 10px; }
     .task-editor {
       margin-top: 14px;
@@ -686,6 +704,7 @@ INDEX_HTML = r"""<!doctype html>
       flex-wrap: wrap;
       margin-bottom: 12px;
     }
+    .log-controls { display: grid; grid-template-columns: minmax(220px, 360px) 1fr; gap: 12px; align-items: end; margin: 12px 0; }
     .log-meta {
       display: grid;
       gap: 6px;
@@ -694,7 +713,7 @@ INDEX_HTML = r"""<!doctype html>
       font-size: 12px;
       word-break: break-all;
     }
-    #task-log-output { min-height: 460px; }
+    #task-log-output, #task-report-output { min-height: 460px; }
     .browser-window {
       min-height: calc(100dvh - 190px);
       display: grid;
@@ -773,7 +792,7 @@ INDEX_HTML = r"""<!doctype html>
       color: #bfdbfe;
       font-size: 12px;
     }
-    .explorer-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 0; }
+    .explorer-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 0; }
     .explorer-tree {
       border-right: 1px solid rgba(96,165,250,.16);
       background: rgba(6,13,28,.52);
@@ -801,6 +820,19 @@ INDEX_HTML = r"""<!doctype html>
       color: var(--soft);
     }
     .explorer-tree button:hover, .explorer-tree button.active { background: rgba(96,165,250,.13); border-color: rgba(96,165,250,.2); }
+    .profile-form { display: grid; gap: 8px; margin: 10px 0; }
+    .profile-list { display: grid; gap: 7px; margin-top: 8px; }
+    .profile-chip {
+      width: 100%;
+      min-height: 34px;
+      border-radius: 9px;
+      padding: 7px 9px;
+      border: 1px solid rgba(96,165,250,.16);
+      background: rgba(96,165,250,.07);
+      color: var(--soft);
+      text-align: left;
+      cursor: pointer;
+    }
     .explorer-main { min-width: 0; overflow: auto; background: rgba(2,8,20,.38); }
     .explorer-breadcrumbs {
       display: flex;
@@ -837,6 +869,14 @@ INDEX_HTML = r"""<!doctype html>
     .browser-table td { padding: 8px 12px; border-bottom: 1px solid rgba(96,165,250,.08); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .browser-table tr { cursor: default; }
     .browser-table tr:hover, .browser-table tr.selected { background: rgba(96,165,250,.14); }
+    .browser-table .check-col { width: 42px; text-align: center; }
+    .browser-check {
+      width: 18px;
+      height: 18px;
+      min-height: 18px;
+      accent-color: #93c5fd;
+      cursor: pointer;
+    }
     .file-name { display: flex; align-items: center; gap: 9px; }
     .file-icon {
       width: 18px;
@@ -939,9 +979,18 @@ INDEX_HTML = r"""<!doctype html>
             </div>
             <button id="create-task" class="primary" type="button">保存到任务列表</button>
           </div>
+          <h2>任务列表</h2>
+          <div id="task-state-tabs" class="task-state-tabs" role="tablist" aria-label="任务状态筛选">
+            <button class="active" type="button" data-task-filter="all">全部任务</button>
+            <button type="button" data-task-filter="running">运行中</button>
+            <button type="button" data-task-filter="paused">暂停</button>
+            <button type="button" data-task-filter="completed">完成</button>
+            <button type="button" data-task-filter="failed">报错</button>
+            <button type="button" data-task-filter="stalled">卡住</button>
+          </div>
           <div id="task-list" class="task-list" aria-label="任务列表"></div>
         </aside>
-        <section class="panel">
+        <section id="task-detail-panel" class="panel">
           <h2>任务仪表盘</h2>
           <div class="metric-grid" id="dashboard-metrics"></div>
           <h2>活跃 Worker</h2>
@@ -1002,6 +1051,10 @@ INDEX_HTML = r"""<!doctype html>
               <option value="SOURCE">SOURCE 远端</option>
               <option value="TARGET">TARGET 远端</option>
             </select>
+            <select id="browser-profile-select" aria-label="浏览配置">
+              <option value="">浏览配置</option>
+            </select>
+            <button id="browser-save-profile" type="button">保存当前位置</button>
             <input id="browser-filter" class="explorer-search" placeholder="搜索当前文件夹">
           </div>
           <div class="explorer-addressbar">
@@ -1019,11 +1072,17 @@ INDEX_HTML = r"""<!doctype html>
               <h3>对象存储</h3>
               <button type="button" data-browser-scope="SOURCE" data-browser-path="">SOURCE 源端</button>
               <button type="button" data-browser-scope="TARGET" data-browser-path="">TARGET 目的端</button>
+              <h3>端点 / 路径库</h3>
+              <div id="profile-form" class="profile-form">
+                <input id="profile-name" placeholder="配置名称，例如 prod-source">
+                <button id="profile-save-current" type="button">保存当前浏览配置</button>
+              </div>
+              <div id="profile-list" class="profile-list" aria-label="浏览配置列表"></div>
             </aside>
             <div class="explorer-main">
               <div id="browser-breadcrumbs" class="explorer-breadcrumbs" aria-label="当前位置"></div>
               <table id="browser-table" class="browser-table">
-                <thead><tr><th>名称</th><th>修改时间 / etag</th><th>类型</th><th>大小</th></tr></thead>
+                <thead><tr><th class="check-col">选择</th><th>名称</th><th>修改时间 / etag</th><th>类型</th><th>大小</th></tr></thead>
                 <tbody id="browser-body"></tbody>
               </table>
             </div>
@@ -1045,11 +1104,21 @@ INDEX_HTML = r"""<!doctype html>
           <p class="muted">实时任务日志会跟随当前选中的任务刷新；任务结束后仍可在 logs、state 和 check_report 目录查看完整文件。</p>
           <button id="refresh-logs" type="button">刷新日志</button>
         </div>
+        <div class="log-controls">
+          <label>选择任务
+            <select id="log-task-select"></select>
+          </label>
+          <div id="log-tabs" class="log-tabs" role="tablist" aria-label="日志和报告">
+            <button id="log-tab-log" class="active" type="button" data-log-tab="log">日志</button>
+            <button id="log-tab-report" type="button" data-log-tab="report">报告</button>
+          </div>
+        </div>
         <div id="task-log-meta" class="log-meta">
           <span>任务日志文件：等待任务启动...</span>
           <span>报告文件：等待任务生成...</span>
         </div>
         <pre id="task-log-output">请选择一个任务，或启动任务后查看实时日志。</pre>
+        <pre id="task-report-output" class="hidden">请选择一个任务，或任务结束后查看报告。</pre>
       </section>
     </main>
     <div class="status-bar"><span id="status-text">Operations Shell 就绪</span><span>API /api/tasks · /api/task/status · /api/task/start · /api/task/pause · /api/task/resume · /api/task/stop</span></div>
@@ -1074,7 +1143,9 @@ INDEX_HTML = r"""<!doctype html>
     const configOutput = document.getElementById("config-output");
     const browserOutput = document.getElementById("browser-output");
     const taskLogOutput = document.getElementById("task-log-output");
+    const taskReportOutput = document.getElementById("task-report-output");
     const taskLogMeta = document.getElementById("task-log-meta");
+    const logTaskSelect = document.getElementById("log-task-select");
     const browserBody = document.getElementById("browser-body");
     const browserStatus = document.getElementById("browser-status");
     const browserSelected = document.getElementById("browser-selected");
@@ -1083,7 +1154,12 @@ INDEX_HTML = r"""<!doctype html>
     const browserContext = document.getElementById("browser-context");
     const browserModeNote = document.getElementById("browser-mode-note");
     let selectedTaskId = null;
+    let allTasks = [];
+    let taskFilter = "all";
+    let logTab = "log";
     let selectedBrowserItem = null;
+    let selectedBrowserItems = new Map();
+    let browserProfiles = [];
     let browserMode = "source";
     let browserHistory = [];
     let browserForward = [];
@@ -1222,13 +1298,48 @@ INDEX_HTML = r"""<!doctype html>
     }
     async function loadTasks() {
       const data = await api("/api/tasks");
-      renderTasks(data.tasks || []);
-      if (!selectedTaskId && data.tasks && data.tasks[0]) selectedTaskId = data.tasks[0].task_id;
+      allTasks = data.tasks || [];
+      renderTaskFilters(allTasks);
+      renderTasks(allTasks);
+      syncLogTaskSelect(allTasks);
+      if (!selectedTaskId && allTasks[0]) selectedTaskId = allTasks[0].task_id;
       if (selectedTaskId) await loadTask(selectedTaskId);
+    }
+    function taskBucket(task) {
+      const state = String(task.state || "").toLowerCase();
+      const d = task.dashboard || {};
+      const workers = d.active_workers || [];
+      if (state === "failed" || Number(d.upload_errors || 0) > 0 || Number(d.scan_errors || 0) > 0) return "failed";
+      if (workers.some(worker => worker.is_stalled || Number(worker.stalled_seconds || 0) > 0) || Number(d.stalled_workers || 0) > 0) return "stalled";
+      if (["paused", "pausing"].includes(state)) return "paused";
+      if (["completed", "stopped", "done"].includes(state)) return "completed";
+      if (["starting", "running", "stopping"].includes(state)) return "running";
+      return "all";
+    }
+    function renderTaskFilters(tasks) {
+      const tabs = document.getElementById("task-state-tabs");
+      if (!tabs) return;
+      const counts = { all: tasks.length, running: 0, paused: 0, completed: 0, failed: 0, stalled: 0 };
+      tasks.forEach(task => {
+        const bucket = taskBucket(task);
+        if (counts[bucket] !== undefined) counts[bucket] += 1;
+      });
+      tabs.querySelectorAll("[data-task-filter]").forEach(button => {
+        const filter = button.dataset.taskFilter;
+        const label = button.textContent.replace(/\s+\d+$/, "");
+        button.textContent = `${label} ${counts[filter] || 0}`;
+        button.classList.toggle("active", filter === taskFilter);
+        button.setAttribute("aria-selected", filter === taskFilter ? "true" : "false");
+      });
     }
     function renderTasks(tasks) {
       taskList.innerHTML = "";
-      tasks.forEach(task => {
+      const visibleTasks = tasks.filter(task => taskFilter === "all" || taskBucket(task) === taskFilter);
+      if (!visibleTasks.length) {
+        taskList.innerHTML = "<p class='muted'>当前筛选下暂无任务。</p>";
+        return;
+      }
+      visibleTasks.forEach(task => {
         const percent = pct(task.dashboard && task.dashboard.percent);
         const card = document.createElement("article");
         card.className = "task-card" + (task.task_id === selectedTaskId ? " selected" : "");
@@ -1275,13 +1386,46 @@ INDEX_HTML = r"""<!doctype html>
       renderConcurrency(task.concurrency || {});
       setStatus("任务状态已更新");
     }
+    function syncLogTaskSelect(tasks) {
+      if (!logTaskSelect) return;
+      const current = logTaskSelect.value || selectedTaskId || "";
+      logTaskSelect.innerHTML = "";
+      if (!tasks.length) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "暂无任务";
+        logTaskSelect.appendChild(option);
+        return;
+      }
+      tasks.forEach(task => {
+        const option = document.createElement("option");
+        option.value = task.task_id;
+        option.textContent = `${task.name || task.task_id} · ${task.state || "unknown"}`;
+        logTaskSelect.appendChild(option);
+      });
+      const exists = tasks.some(task => task.task_id === current);
+      logTaskSelect.value = exists ? current : tasks[0].task_id;
+      if (!selectedTaskId && logTaskSelect.value) selectedTaskId = logTaskSelect.value;
+    }
+    function renderLogTab() {
+      document.querySelectorAll("[data-log-tab]").forEach(button => {
+        const active = button.dataset.logTab === logTab;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      if (taskLogOutput) taskLogOutput.classList.toggle("hidden", logTab !== "log");
+      if (taskReportOutput) taskReportOutput.classList.toggle("hidden", logTab !== "report");
+    }
     async function loadTaskLog(taskId = selectedTaskId) {
       if (!taskLogOutput || !taskLogMeta) return;
+      taskId = (logTaskSelect && logTaskSelect.value) || taskId;
       if (!taskId) {
         taskLogMeta.innerHTML = "<span>任务日志文件：未选择任务</span><span>报告文件：未选择任务</span>";
         taskLogOutput.textContent = "请先在任务仪表盘选择一个任务。";
+        if (taskReportOutput) taskReportOutput.textContent = "请先选择一个任务。";
         return;
       }
+      selectedTaskId = taskId;
       const data = await api(`/api/tasks/${taskId}/logs?max_bytes=65536`);
       const log = data.log || {};
       taskLogMeta.innerHTML = [
@@ -1289,6 +1433,15 @@ INDEX_HTML = r"""<!doctype html>
         "报告文件：" + (log.report_file || "任务尚未生成报告")
       ].map(item => `<span>${escapeHtml(item)}</span>`).join("");
       taskLogOutput.textContent = log.content || "任务日志为空或尚未写入。";
+      if (taskReportOutput) {
+        taskReportOutput.textContent = [
+          "报告文件：" + (log.report_file || "任务尚未生成报告"),
+          "摘要文件：" + (log.summary_file || "任务尚未生成摘要"),
+          "状态目录：" + (log.state_dir || "未设置"),
+          "失败目录：" + (log.failed_dir || "未设置")
+        ].join("\n");
+      }
+      renderLogTab();
     }
     function renderConcurrency(concurrency) {
       document.getElementById("concurrency-upload").value = concurrency.upload_workers || 32;
@@ -1423,6 +1576,7 @@ INDEX_HTML = r"""<!doctype html>
         scope: document.getElementById("browser-scope").value,
         path: document.getElementById("browser-path").value || ".",
         bucket: document.getElementById("browser-bucket").value,
+        profile_id: document.getElementById("browser-profile-select").value,
         filter: document.getElementById("browser-filter").value
       };
     }
@@ -1444,9 +1598,71 @@ INDEX_HTML = r"""<!doctype html>
         params.set("section", loc.scope);
         params.set("bucket", loc.bucket || "");
         params.set("prefix", loc.path || "");
+        if (loc.profile_id) params.set("profile_id", loc.profile_id);
         data = await api("/api/browser/remote?" + params.toString());
       }
       renderBrowser(data.page);
+    }
+    async function loadBrowserProfiles() {
+      const data = await api("/api/browser/profiles");
+      browserProfiles = data.profiles || [];
+      renderBrowserProfiles();
+    }
+    function renderBrowserProfiles() {
+      const select = document.getElementById("browser-profile-select");
+      const list = document.getElementById("profile-list");
+      if (!select || !list) return;
+      const current = select.value;
+      select.innerHTML = "<option value=''>浏览配置</option>";
+      list.innerHTML = "";
+      browserProfiles.forEach(profile => {
+        const option = document.createElement("option");
+        option.value = profile.id;
+        option.textContent = `${profile.name || profile.id} · ${profile.role || profile.section || profile.type || ""}`;
+        select.appendChild(option);
+        const chip = document.createElement("div");
+        chip.className = "profile-chip";
+        chip.textContent = `${profile.name || profile.id} · ${profile.path || profile.prefix || profile.bucket || ""}`;
+        chip.addEventListener("click", () => applyBrowserProfile(profile.id));
+        list.appendChild(chip);
+      });
+      if (current && browserProfiles.some(profile => profile.id === current)) select.value = current;
+      if (!list.innerHTML) list.innerHTML = "<p class='muted'>暂无保存的浏览配置。</p>";
+    }
+    function applyBrowserProfile(profileId) {
+      const profile = browserProfiles.find(item => item.id === profileId);
+      if (!profile) return;
+      document.getElementById("browser-profile-select").value = profile.id;
+      document.getElementById("browser-scope").value = profile.section || (profile.role === "target" ? "TARGET" : (profile.type === "local" ? "local" : "SOURCE"));
+      document.getElementById("browser-path").value = profile.path || profile.prefix || "";
+      document.getElementById("browser-bucket").value = profile.bucket || "";
+      browserMode = document.getElementById("browser-scope").value === "TARGET" ? "target" : "source";
+      browse(true).catch(error => browserOutput.textContent = error.message);
+    }
+    async function saveCurrentBrowserProfile() {
+      const loc = browserLocation();
+      const nameInput = document.getElementById("profile-name");
+      const name = (nameInput && nameInput.value.trim()) || `${loc.scope} ${loc.bucket || loc.path || "root"}`;
+      const profile = {
+        id: "profile-" + Date.now(),
+        name,
+        role: loc.scope === "TARGET" ? "target" : "source",
+        type: loc.scope === "local" ? "local" : "remote",
+        section: loc.scope === "local" ? "" : loc.scope,
+        bucket: loc.bucket || "",
+        path: loc.scope === "local" ? loc.path : "",
+        prefix: loc.scope === "local" ? "" : loc.path
+      };
+      const data = await api("/api/browser/profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profiles: browserProfiles.concat([profile]) })
+      });
+      browserProfiles = data.profiles || [];
+      renderBrowserProfiles();
+      document.getElementById("browser-profile-select").value = profile.id;
+      if (nameInput) nameInput.value = "";
+      setStatus("浏览配置已保存");
     }
     function updateBrowserModeChrome() {
       const sourceMode = browserMode !== "target";
@@ -1479,6 +1695,7 @@ INDEX_HTML = r"""<!doctype html>
     }
     function renderBrowser(page) {
       selectedBrowserItem = null;
+      selectedBrowserItems = new Map();
       browserOutput.textContent = JSON.stringify(page, null, 2);
       if (page.path !== undefined) document.getElementById("browser-path").value = page.path || "";
       if (page.bucket !== undefined) document.getElementById("browser-bucket").value = page.bucket || "";
@@ -1497,7 +1714,18 @@ INDEX_HTML = r"""<!doctype html>
       items.forEach(item => {
         const tr = document.createElement("tr");
         const iconClass = browserIconClass(item.kind);
-        tr.innerHTML = `<td><span class="file-name"><span class="file-icon ${iconClass}"></span>${escapeHtml(item.name || "")}</span></td><td>${escapeHtml(item.mtime || item.etag || "")}</td><td>${browserKindLabel(item.kind)}</td><td>${browserDisplaySize(item)}</td>`;
+        const itemPath = item.path || item.name || "";
+        tr.innerHTML = `<td class="check-col"><input class="browser-check" type="checkbox" aria-label="选择 ${escapeHtml(item.name || "")}"></td><td><span class="file-name"><span class="file-icon ${iconClass}"></span>${escapeHtml(item.name || "")}</span></td><td>${escapeHtml(item.mtime || item.etag || "")}</td><td>${browserKindLabel(item.kind)}</td><td>${browserDisplaySize(item)}</td>`;
+        const checkbox = tr.querySelector(".browser-check");
+        checkbox.addEventListener("click", event => {
+          event.stopPropagation();
+          if (checkbox.checked) {
+            selectedBrowserItems.set(itemPath, item);
+          } else {
+            selectedBrowserItems.delete(itemPath);
+          }
+          updateBrowserSelectionText();
+        });
         tr.addEventListener("click", () => {
           selectedBrowserItem = item;
           browserBody.querySelectorAll("tr").forEach(row => row.classList.remove("selected"));
@@ -1507,6 +1735,19 @@ INDEX_HTML = r"""<!doctype html>
         tr.addEventListener("dblclick", () => enterBrowserItem(item));
         browserBody.appendChild(tr);
       });
+    }
+    function checkedBrowserPaths() {
+      return Array.from(selectedBrowserItems.values()).map(item => item.path || item.name || "").filter(Boolean);
+    }
+    function updateBrowserSelectionText() {
+      const count = selectedBrowserItems.size;
+      if (count > 0) {
+        browserSelected.textContent = `已勾选 ${count} 个项目`;
+      } else if (selectedBrowserItem) {
+        browserSelected.textContent = browserMode === "target" ? `已选择：${selectedBrowserItem.name || ""}；目标落点仍以当前目录为准` : `已选择：${selectedBrowserItem.name || ""}`;
+      } else {
+        browserSelected.textContent = browserMode === "target" ? "当前目标目录：" + (currentBrowserDirectory() || "未设置") : "未选择项目";
+      }
     }
     function enterBrowserItem(item) {
       if (!item || item.kind === "file") return;
@@ -1533,15 +1774,16 @@ INDEX_HTML = r"""<!doctype html>
         setTargetDirectoryFromBrowser();
         return;
       }
-      if (!selectedBrowserItem) {
+      const checkedPaths = checkedBrowserPaths();
+      if (!checkedPaths.length && !selectedBrowserItem) {
         const message = "请先在文件列表中单击选择一个目录或对象。";
         browserSelected.textContent = message;
         browserOutput.textContent = message;
         setStatus(message);
         return;
       }
-      const selectedPath = selectedBrowserItem.path || selectedBrowserItem.name || "";
-      if (!selectedPath) {
+      const selectedPaths = checkedPaths.length ? checkedPaths : [selectedBrowserItem.path || selectedBrowserItem.name || ""].filter(Boolean);
+      if (!selectedPaths.length) {
         const message = "选中项目缺少可加入迁移列表的路径。";
         browserSelected.textContent = message;
         browserOutput.textContent = message;
@@ -1551,9 +1793,9 @@ INDEX_HTML = r"""<!doctype html>
       const data = await api("/api/source-list", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: [selectedPath] })
+        body: JSON.stringify({ items: selectedPaths })
       });
-      browserSelected.textContent = "已加入迁移列表：" + selectedPath;
+      browserSelected.textContent = "已加入迁移列表：" + selectedPaths.join(", ");
       setStatus("已加入迁移列表");
       browserOutput.textContent = JSON.stringify(data, null, 2);
     }
@@ -1582,16 +1824,18 @@ INDEX_HTML = r"""<!doctype html>
       setStatus("迁移目标已设为：" + targetPath);
     }
     function fillSelectedTaskConfig() {
-      if (!selectedBrowserItem) return;
+      const checkedPaths = checkedBrowserPaths();
+      const sourcePath = checkedPaths[0] || (selectedBrowserItem && (selectedBrowserItem.path || selectedBrowserItem.name || ""));
+      if (!sourcePath) return;
       window.location.hash = "#dashboard";
       showPage("dashboard");
       document.getElementById("task-editor").classList.remove("hidden");
       document.getElementById("task-editor").scrollIntoView({ behavior: "smooth", block: "start" });
-      document.getElementById("new-task-source").value = selectedBrowserItem.path || selectedBrowserItem.name || "";
+      document.getElementById("new-task-source").value = sourcePath;
     }
     async function bootApp() {
       showApp();
-      await Promise.all([loadTasks(), loadConfig()]);
+      await Promise.all([loadTasks(), loadConfig(), loadBrowserProfiles()]);
       browse(false).catch(() => {});
       window.setInterval(() => loadTasks().catch(() => {}), 3000);
       window.setInterval(() => {
@@ -1602,6 +1846,25 @@ INDEX_HTML = r"""<!doctype html>
     document.getElementById("logout-button").addEventListener("click", logout);
     document.getElementById("refresh-tasks").addEventListener("click", () => loadTasks().catch(error => setStatus(error.message)));
     document.getElementById("refresh-logs").addEventListener("click", () => loadTaskLog().catch(error => taskLogOutput.textContent = error.message));
+    document.querySelectorAll("[data-task-filter]").forEach(button => {
+      button.addEventListener("click", () => {
+        taskFilter = button.dataset.taskFilter || "all";
+        renderTaskFilters(allTasks);
+        renderTasks(allTasks);
+      });
+    });
+    document.querySelectorAll("[data-log-tab]").forEach(button => {
+      button.addEventListener("click", () => {
+        logTab = button.dataset.logTab || "log";
+        renderLogTab();
+      });
+    });
+    if (logTaskSelect) {
+      logTaskSelect.addEventListener("change", () => {
+        selectedTaskId = logTaskSelect.value || selectedTaskId;
+        loadTaskLog(selectedTaskId).catch(error => taskLogOutput.textContent = error.message);
+      });
+    }
     document.getElementById("new-task-button").addEventListener("click", () => {
       const editor = document.getElementById("task-editor");
       const hidden = editor.classList.toggle("hidden");
@@ -1620,6 +1883,11 @@ INDEX_HTML = r"""<!doctype html>
     document.getElementById("save-config").addEventListener("click", () => saveConfig().catch(error => configOutput.textContent = error.message));
     document.getElementById("browser-refresh").addEventListener("click", () => browse(true).catch(error => browserOutput.textContent = error.message));
     document.getElementById("browser-go").addEventListener("click", () => browse(true).catch(error => browserOutput.textContent = error.message));
+    document.getElementById("browser-profile-select").addEventListener("change", event => {
+      if (event.target.value) applyBrowserProfile(event.target.value);
+    });
+    document.getElementById("browser-save-profile").addEventListener("click", () => saveCurrentBrowserProfile().catch(error => browserOutput.textContent = error.message));
+    document.getElementById("profile-save-current").addEventListener("click", () => saveCurrentBrowserProfile().catch(error => browserOutput.textContent = error.message));
     document.getElementById("browser-scope").addEventListener("change", () => {
       browserMode = document.getElementById("browser-scope").value === "TARGET" ? "target" : "source";
       browse(true).catch(error => browserOutput.textContent = error.message);
@@ -1814,6 +2082,10 @@ class WebConsoleServer:
                 self._handle_local_browser(request, parsed)
             elif request.command == "GET" and path == "/api/browser/remote":
                 self._handle_remote_browser(request, parsed)
+            elif request.command == "GET" and path == "/api/browser/profiles":
+                self._handle_browser_profiles(request)
+            elif request.command == "POST" and path == "/api/browser/profiles":
+                self._handle_save_browser_profiles(request)
             elif request.command == "POST" and path == "/api/source-list":
                 self._handle_source_list(request)
             else:
@@ -1969,22 +2241,25 @@ class WebConsoleServer:
 
     def _handle_remote_browser(self, request, parsed):
         query = _query(parsed)
-        section = _first(query, "section", "SOURCE").upper()
+        cfg = self.config_loader()
+        profile_id = _first(query, "profile_id", "")
+        profile = _find_browser_profile(cfg, profile_id) if profile_id else None
+        section = str((profile or {}).get("section") or _first(query, "section", "SOURCE")).upper()
         if section not in {"SOURCE", "TARGET"}:
             raise ValueError("section must be SOURCE or TARGET")
-        cfg = self.config_loader()
-        client = self._make_obs_client(section, cfg)
-        bucket = _first(query, "bucket", "")
+        client = self._make_obs_client_for_profile(section, cfg, profile)
+        bucket = _first(query, "bucket", (profile or {}).get("bucket", ""))
         page = _int_param(query, "page", 1)
         page_size = _int_param(query, "page_size", 50)
         marker = _first(query, "marker", None)
         filters = _first(query, "filter", "")
+        prefix = _first(query, "prefix", (profile or {}).get("prefix", ""))
 
         if bucket:
             browser_page = list_remote_prefix(
                 client,
                 bucket,
-                prefix=_first(query, "prefix", ""),
+                prefix=prefix,
                 marker=marker,
                 page=page,
                 page_size=page_size,
@@ -1993,6 +2268,19 @@ class WebConsoleServer:
         else:
             browser_page = list_remote_buckets(client, page=page, page_size=page_size)
         self._send_json(request, {"ok": True, "page": _serialize_page(browser_page)})
+
+    def _handle_browser_profiles(self, request):
+        self._send_json(request, {"ok": True, "profiles": _browser_profiles_from_config(self.config_loader())})
+
+    def _handle_save_browser_profiles(self, request):
+        payload = self._read_json(request)
+        profiles = _normalize_browser_profiles(payload.get("profiles", []))
+        cfg = self.config_loader()
+        if not cfg.has_section("BROWSER_PROFILES"):
+            cfg.add_section("BROWSER_PROFILES")
+        cfg.set("BROWSER_PROFILES", "profiles", json.dumps(profiles, ensure_ascii=False))
+        self.config_saver(cfg)
+        self._send_json(request, {"ok": True, "profiles": profiles})
 
     def _handle_source_list(self, request):
         payload = self._read_json(request)
@@ -2037,6 +2325,17 @@ class WebConsoleServer:
         ak = self.decrypt_secret(cfg.get(section, "ak", fallback=""))
         sk = self.decrypt_secret(cfg.get(section, "sk", fallback=""))
         endpoint = cfg.get(section, "endpoint", fallback="")
+        timeout = cfg.getint(section, "request_timeout", fallback=60)
+        return create_obs_client(ak, sk, endpoint, timeout)
+
+    def _make_obs_client_for_profile(self, section, cfg, profile):
+        if not profile or not profile.get("endpoint"):
+            return self._make_obs_client(section, cfg)
+        if self.obs_client_factory is not None:
+            return self._call_obs_client_factory(section, cfg)
+        ak = self.decrypt_secret(profile.get("ak", "") or cfg.get(section, "ak", fallback=""))
+        sk = self.decrypt_secret(profile.get("sk", "") or cfg.get(section, "sk", fallback=""))
+        endpoint = profile.get("endpoint", "") or cfg.get(section, "endpoint", fallback="")
         timeout = cfg.getint(section, "request_timeout", fallback=60)
         return create_obs_client(ak, sk, endpoint, timeout)
 
@@ -2176,6 +2475,105 @@ def _read_tail_text(file_path, max_bytes=65536):
             handle.readline()
         raw = handle.read(max_bytes)
     return raw.decode("utf-8", errors="replace")
+
+
+def _browser_profiles_from_config(cfg):
+    raw = cfg.get("BROWSER_PROFILES", "profiles", fallback="[]") if cfg.has_section("BROWSER_PROFILES") else "[]"
+    try:
+        loaded = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        loaded = []
+    profiles = _normalize_browser_profiles(loaded)
+    if profiles:
+        return profiles
+    return _default_browser_profiles(cfg)
+
+
+def _default_browser_profiles(cfg):
+    profiles = []
+    if cfg.has_section("SOURCE"):
+        source_type = cfg.get("SOURCE", "type", fallback="local")
+        profiles.append(
+            {
+                "id": "source-default",
+                "name": "SOURCE 默认源端",
+                "role": "source",
+                "type": "local" if source_type == "local" else "remote",
+                "section": "SOURCE",
+                "path": cfg.get("SOURCE", "path", fallback=""),
+                "bucket": cfg.get("SOURCE", "bucket", fallback=""),
+                "prefix": cfg.get("SOURCE", "prefix", fallback=""),
+            }
+        )
+    if cfg.has_section("TARGET"):
+        target_type = cfg.get("TARGET", "type", fallback="s3")
+        profiles.append(
+            {
+                "id": "target-default",
+                "name": "TARGET 默认目的端",
+                "role": "target",
+                "type": "local" if target_type == "local" else "remote",
+                "section": "TARGET",
+                "path": cfg.get("TARGET", "path", fallback=""),
+                "bucket": cfg.get("TARGET", "bucket", fallback=""),
+                "prefix": cfg.get("TARGET", "prefix", fallback=""),
+            }
+        )
+    return profiles
+
+
+def _normalize_browser_profiles(values):
+    if not isinstance(values, list):
+        raise ValueError("profiles must be a list")
+    profiles = []
+    seen = set()
+    for index, item in enumerate(values, start=1):
+        if not isinstance(item, dict):
+            raise ValueError("profile must be an object")
+        profile_id = _safe_profile_text(item.get("id")) or f"profile-{index}"
+        profile_id = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in profile_id)[:80]
+        while profile_id in seen:
+            profile_id = f"{profile_id}-{index}"
+        seen.add(profile_id)
+        role = _safe_profile_text(item.get("role")).lower()
+        if role not in {"source", "target", "both"}:
+            role = "both"
+        profile_type = _safe_profile_text(item.get("type")).lower()
+        if profile_type not in {"local", "remote", "obs", "s3"}:
+            profile_type = "local"
+        if profile_type in {"obs", "s3"}:
+            profile_type = "remote"
+        section = _safe_profile_text(item.get("section")).upper()
+        if section not in {"SOURCE", "TARGET"}:
+            section = "TARGET" if role == "target" else "SOURCE"
+        profiles.append(
+            {
+                "id": profile_id,
+                "name": _safe_profile_text(item.get("name")) or profile_id,
+                "role": role,
+                "type": profile_type,
+                "section": section,
+                "path": _safe_profile_text(item.get("path")),
+                "bucket": _safe_profile_text(item.get("bucket")),
+                "prefix": _safe_profile_text(item.get("prefix")),
+                "endpoint": _safe_profile_text(item.get("endpoint")),
+                "ak": _safe_profile_text(item.get("ak")),
+                "sk": _safe_profile_text(item.get("sk")),
+            }
+        )
+    return profiles
+
+
+def _find_browser_profile(cfg, profile_id):
+    profile_id = str(profile_id or "")
+    for profile in _browser_profiles_from_config(cfg):
+        if profile.get("id") == profile_id:
+            return profile
+    return None
+
+
+def _safe_profile_text(value):
+    return str(value or "").strip()
 
 
 def _file_ends_with_newline(file_path):

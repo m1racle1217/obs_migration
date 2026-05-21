@@ -611,6 +611,38 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertIn("Task Started", data["log"]["content"])
         self.assertIn("上传完成", data["log"]["content"])
 
+    def test_browser_profiles_api_saves_and_returns_profile_list(self):
+        cfg = make_config(require_login=False)
+        _server, client, saved, _cfg = self.make_server(cfg)
+        profiles = [
+            {
+                "id": "local-data",
+                "name": "本地数据盘",
+                "role": "source",
+                "type": "local",
+                "path": "D:\\data",
+            },
+            {
+                "id": "target-prod",
+                "name": "目标桶-prod",
+                "role": "target",
+                "type": "remote",
+                "section": "TARGET",
+                "bucket": "prod-bucket",
+                "prefix": "root/out",
+            },
+        ]
+
+        status, data, _headers = client.request("POST", "/api/browser/profiles", {"profiles": profiles})
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual([item["id"] for item in data["profiles"]], ["local-data", "target-prod"])
+        self.assertTrue(saved)
+
+        status, data, _headers = client.request("GET", "/api/browser/profiles")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["profiles"][1]["bucket"], "prod-bucket")
+
     def test_static_page_contains_shell_labels(self):
         _server, client, _saved, _cfg = self.make_server()
 
@@ -631,10 +663,24 @@ class WebConsoleServerTests(unittest.TestCase):
             "当前是源端选择",
             "当前是目的端选择",
             "任务仪表盘",
+            "任务列表",
+            "全部任务",
+            "运行中",
+            "暂停",
+            "完成",
+            "报错",
+            "卡住",
             "日志 / 报告",
             "实时任务日志",
             "刷新日志",
             "任务日志文件",
+            "选择任务",
+            "日志",
+            "报告",
+            "报告文件",
+            "端点 / 路径库",
+            "浏览配置",
+            "保存当前位置",
             "<h2>登录</h2>",
             "默认：admin",
             "默认是 admin / admin",
@@ -669,6 +715,7 @@ class WebConsoleServerTests(unittest.TestCase):
             "/api/task/resume",
             "/api/task/stop",
             "/logs",
+            "/api/browser/profiles",
         ):
             self.assertIn(endpoint, html)
         for marker in (
@@ -682,10 +729,19 @@ class WebConsoleServerTests(unittest.TestCase):
             'id="app-shell"',
             'id="logout-button"',
             'id="task-list"',
+            'id="task-state-tabs"',
+            'id="task-detail-panel"',
             'class="task-editor hidden"',
+            'id="profile-form"',
+            'id="profile-list"',
             'id="browser-table"',
+            'class="browser-check"',
+            'selectedBrowserItems',
+            'function checkedBrowserPaths',
             'id="browser-set-target"',
             'id="browser-mode-note"',
+            'id="browser-profile-select"',
+            'id="browser-save-profile"',
             'class="browser-workspace-eyebrow"',
             'data-browser-mode="source"',
             'data-browser-mode="target"',
@@ -694,7 +750,13 @@ class WebConsoleServerTests(unittest.TestCase):
             'id="browser-status"',
             'id="task-log-output"',
             'id="refresh-logs"',
+            'id="log-task-select"',
+            'id="log-tab-log"',
+            'id="log-tab-report"',
+            'id="task-report-output"',
             'function loadTaskLog',
+            'function loadBrowserProfiles',
+            'function renderTaskFilters',
             'class="explorer-tree"',
             'data-browser-scope="local"',
             'data-browser-scope="SOURCE"',

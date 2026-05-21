@@ -298,6 +298,9 @@ DEFAULT_CONFIG = {
         "password": "admin",
         "auto_open": "false",
     },
+    "BROWSER_PROFILES": {
+        "profiles": "[]",
+    },
 }
 
 CONFIG_DESC["UI.language"] = "界面语言：zh（中文）或 en（English）"
