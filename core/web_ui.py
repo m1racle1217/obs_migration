@@ -1562,9 +1562,11 @@ INDEX_HTML = r"""<!doctype html>
             <label>用途 <select id="position-preset-role"><option value="source">源端</option><option value="target">目标端</option><option value="both">通用</option></select></label>
             <label>存储类型 <select id="position-preset-type"><option value="local">本地路径</option><option value="remote">OBS/S3 对象存储</option></select></label>
             <label>本地路径 <input id="position-preset-path" placeholder="D:\data 或 /mnt/data"></label>
+            <label id="position-preset-paths-label" class="hidden">多个本地路径 <textarea id="position-preset-paths" placeholder="每行一个本地路径"></textarea></label>
             <label>Endpoint <input id="position-preset-endpoint" placeholder="https://obs.xxx.com"></label>
             <label>Bucket <input id="position-preset-bucket" placeholder="bucket-name"></label>
             <label>Prefix <input id="position-preset-prefix" placeholder="root/prefix"></label>
+            <label id="position-preset-prefixes-label" class="hidden">多个 Prefix <textarea id="position-preset-prefixes" placeholder="每行一个 Prefix"></textarea></label>
             <label>AccessKey <input id="position-preset-ak" autocomplete="off"></label>
             <label>SecretKey <input id="position-preset-sk" type="password" autocomplete="new-password"></label>
           </div>
@@ -2686,6 +2688,8 @@ INDEX_HTML = r"""<!doctype html>
       });
       const pathLabel = document.getElementById("position-preset-path")?.closest("label");
       if (pathLabel) pathLabel.classList.toggle("hidden", !isLocal);
+      document.getElementById("position-preset-paths-label")?.classList.toggle("hidden", !isLocal);
+      document.getElementById("position-preset-prefixes-label")?.classList.toggle("hidden", isLocal);
     }
     async function createPositionPreset() {
       const name = document.getElementById("position-preset-name").value.trim();
@@ -2696,8 +2700,10 @@ INDEX_HTML = r"""<!doctype html>
       const type = document.getElementById("position-preset-type").value;
       const role = document.getElementById("position-preset-role").value;
       const form = document.getElementById("position-preset-form");
-      const pendingPaths = parsePresetDefaultList(form.dataset.paths);
-      const pendingPrefixes = parsePresetDefaultList(form.dataset.prefixes);
+      const typedPaths = parsePresetTextList(document.getElementById("position-preset-paths").value);
+      const typedPrefixes = parsePresetTextList(document.getElementById("position-preset-prefixes").value);
+      const pendingPaths = typedPaths.length ? typedPaths : parsePresetDefaultList(form.dataset.paths);
+      const pendingPrefixes = typedPrefixes.length ? typedPrefixes : parsePresetDefaultList(form.dataset.prefixes);
       const pathValue = document.getElementById("position-preset-path").value.trim();
       const prefixValue = document.getElementById("position-preset-prefix").value.trim();
       const profile = {
@@ -2724,7 +2730,7 @@ INDEX_HTML = r"""<!doctype html>
       renderBrowserProfiles();
       renderTaskProfileSelects();
       renderPositionPresetManager();
-      ["position-preset-name", "position-preset-path", "position-preset-endpoint", "position-preset-bucket", "position-preset-prefix", "position-preset-ak", "position-preset-sk"].forEach(id => {
+      ["position-preset-name", "position-preset-path", "position-preset-paths", "position-preset-endpoint", "position-preset-bucket", "position-preset-prefix", "position-preset-prefixes", "position-preset-ak", "position-preset-sk"].forEach(id => {
         const field = document.getElementById(id);
         if (field) field.value = "";
       });
@@ -2739,6 +2745,13 @@ INDEX_HTML = r"""<!doctype html>
         return [];
       }
     }
+    function parsePresetTextList(raw) {
+      return String(raw || "")
+        .replace(/;/g, "\n")
+        .split(/\r?\n/)
+        .map(value => String(value || "").trim())
+        .filter(Boolean);
+    }
     function mergePresetValues(values, fallback) {
       const merged = Array.from(new Set(values.concat([fallback || ""]).map(value => String(value || "").trim()).filter(Boolean)));
       return merged;
@@ -2746,15 +2759,19 @@ INDEX_HTML = r"""<!doctype html>
     function openPositionPresetModal(defaults = {}) {
       document.getElementById("position-preset-modal").classList.remove("hidden");
       const form = document.getElementById("position-preset-form");
-      form.dataset.paths = JSON.stringify(defaults.paths || []);
-      form.dataset.prefixes = JSON.stringify(defaults.prefixes || []);
+      const pathList = mergePresetValues(defaults.paths || [], defaults.path || "");
+      const prefixList = mergePresetValues(defaults.prefixes || [], defaults.prefix || "");
+      form.dataset.paths = JSON.stringify(pathList);
+      form.dataset.prefixes = JSON.stringify(prefixList);
       if (defaults.name !== undefined) document.getElementById("position-preset-name").value = defaults.name || "";
       if (defaults.role) document.getElementById("position-preset-role").value = defaults.role;
       if (defaults.type) document.getElementById("position-preset-type").value = defaults.type;
-      if (defaults.path !== undefined) document.getElementById("position-preset-path").value = defaults.path || "";
+      if (defaults.path !== undefined || pathList.length) document.getElementById("position-preset-path").value = defaults.path || pathList[0] || "";
+      document.getElementById("position-preset-paths").value = pathList.join("\n");
       if (defaults.endpoint !== undefined) document.getElementById("position-preset-endpoint").value = defaults.endpoint || "";
       if (defaults.bucket !== undefined) document.getElementById("position-preset-bucket").value = defaults.bucket || "";
-      if (defaults.prefix !== undefined) document.getElementById("position-preset-prefix").value = defaults.prefix || "";
+      if (defaults.prefix !== undefined || prefixList.length) document.getElementById("position-preset-prefix").value = defaults.prefix || prefixList[0] || "";
+      document.getElementById("position-preset-prefixes").value = prefixList.join("\n");
       if (defaults.ak !== undefined) document.getElementById("position-preset-ak").value = defaults.ak || "";
       if (defaults.sk !== undefined) document.getElementById("position-preset-sk").value = defaults.sk || "";
       updatePositionPresetFieldVisibility();
