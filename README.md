@@ -587,8 +587,15 @@ auto_open = false
 python obs_migrate.py --web
 ```
 
+开发 Web UI 时可启用标准库热重载：
+
+```powershell
+python obs_migrate.py --web-reload
+```
+
 - `enabled`：设为 `true` 时，普通 `python obs_migrate.py` 也会启动 Web 控制台。
 - `--web`：临时启用 Web 控制台，不需要修改 `config.ini`。
+- `--web-reload`：开发模式；监听 `core/web_ui.py` 变更并自动重载 Web 控制台，改完后刷新浏览器即可看到新页面。
 - `host` / `port`：监听地址和端口；端口被占用时启动错误会包含当前 host/port。
 - `require_login` / `username` / `password`：控制 API 登录；非本机监听建议保持登录开启。
 - `auto_open`：设为 `true` 时启动后自动打开浏览器。

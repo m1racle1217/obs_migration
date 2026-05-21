@@ -653,25 +653,31 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertNotIn("body::after", html)
         self.assertNotIn('<pre id="config-output"', html)
         self.assertNotIn("configOutput.textContent = JSON.stringify(data.config", html)
+        self.assertNotIn('class="status-bar"', html)
+        self.assertNotIn(">源存储位置<", html)
+        self.assertNotIn(">目标存储位置<", html)
+        self.assertNotIn("源端目录浏览", html)
+        self.assertNotIn("浏览源端目录，选择后加入迁移列表", html)
+        self.assertNotIn("源端配置</option>", html)
+        self.assertNotIn("目标端配置</option>", html)
+        self.assertNotIn("暂无保存的存储位置", html)
+        self.assertNotIn("未命名存储位置", html)
         for label in (
             "配置中心",
             "配置已加载",
-            "存储位置",
-            "源存储位置",
-            "目标存储位置",
             "存储类型",
             "本地路径",
             "OBS/S3 对象存储",
             "位置预设",
+            "输入路径时先保存一个名字",
+            "预设名称",
+            "保存位置预设",
             "目录浏览",
-            "源端目录浏览",
-            "目的端目录浏览",
-            "源端选择",
-            "目的端选择",
-            "选择要迁移的目录/对象",
-            "设置迁移落点",
-            "当前是源端选择",
-            "当前是目的端选择",
+            "位置预设浏览",
+            "选择位置预设后浏览其中的目录或对象",
+            "选择一个位置预设，就像打开资源管理器里的收藏位置",
+            "可作为源端迁移入口",
+            "可作为目标落点",
             "任务列表",
             "任务详情仪表盘",
             "任务列表",
@@ -689,30 +695,23 @@ class WebConsoleServerTests(unittest.TestCase):
             "日志",
             "报告",
             "报告文件",
-            "存储位置库",
-            "选择存储位置",
-            "保存为存储位置",
+            "选择位置预设",
+            "保存当前位置为预设",
             "<h2>登录</h2>",
             "默认：admin",
             "默认是 admin / admin",
             "新增任务",
-            "选择源存储位置",
-            "选择目标存储位置",
+            "选择源位置预设",
+            "选择目标位置预设",
             "请先点击“新增任务”创建任务",
             "退出登录",
             "启动任务",
             "后退",
             "前进",
             "上一级",
-            "快速访问",
-            "此电脑",
-            "本地源目录",
-            "SOURCE 源端",
-            "TARGET 目的端",
             "转到",
             "加入迁移列表",
             "迁移到当前目录",
-            "把迁移目标设为当前目录",
             "请先在文件列表中单击选择",
             "已加入迁移列表",
             "填入任务配置",
@@ -722,11 +721,6 @@ class WebConsoleServerTests(unittest.TestCase):
             self.assertIn(label, html)
         for endpoint in (
             "/api/tasks",
-            "/api/task/status",
-            "/api/task/start",
-            "/api/task/pause",
-            "/api/task/resume",
-            "/api/task/stop",
             "/logs",
             "/api/browser/profiles",
         ):
@@ -750,6 +744,8 @@ class WebConsoleServerTests(unittest.TestCase):
             'id="app-shell"',
             'id="logout-button"',
             'id="task-list"',
+            'class="task-grid task-grid-full"',
+            'function updateDashboardLayout',
             'id="task-state-tabs"',
             'id="task-detail-panel"',
             'class="panel task-detail-panel hidden"',
@@ -759,11 +755,14 @@ class WebConsoleServerTests(unittest.TestCase):
             'class="task-editor hidden"',
             'id="new-task-source-profile"',
             'id="new-task-target-profile"',
+            'id="position-preset-form"',
+            'id="position-preset-list"',
+            'function renderPositionPresetManager',
+            'function createPositionPreset',
             'function renderTaskProfileSelects',
             'select.innerHTML = `<option value="">',
             'function taskConfigFromProfiles',
             'function applyTaskProfile',
-            'id="profile-form"',
             'id="profile-list"',
             'id="browser-table"',
             'class="browser-check"',
@@ -772,10 +771,10 @@ class WebConsoleServerTests(unittest.TestCase):
             'id="browser-set-target"',
             'id="browser-mode-note"',
             'id="browser-profile-select"',
+            'id="browser-profile-empty"',
+            'function selectedBrowserProfile',
+            'function browserProfileScope',
             'id="browser-save-profile"',
-            'class="browser-workspace-eyebrow"',
-            'data-browser-mode="source"',
-            'data-browser-mode="target"',
             'id="browser-go"',
             'id="browser-breadcrumbs"',
             'id="browser-status"',
@@ -789,8 +788,6 @@ class WebConsoleServerTests(unittest.TestCase):
             'function loadBrowserProfiles',
             'function renderTaskFilters',
             'class="explorer-tree"',
-            'data-browser-scope="local"',
-            'data-browser-scope="SOURCE"',
             'data-page="dashboard"',
             'data-page="config"',
             'data-page="browser"',
@@ -802,7 +799,6 @@ class WebConsoleServerTests(unittest.TestCase):
             'function showPage',
             'function renderBreadcrumbs',
             'function browserKindLabel',
-            'function setBrowserMode',
             'function setTargetDirectoryFromBrowser',
             'window.addEventListener("hashchange"',
             'api("/api/logout"',
@@ -827,6 +823,8 @@ class CliStartupTests(unittest.TestCase):
     def test_parse_args_web_flag(self):
         self.assertFalse(obs_migrate.parse_args([]).web)
         self.assertTrue(obs_migrate.parse_args(["--web"]).web)
+        self.assertFalse(obs_migrate.parse_args([]).web_reload)
+        self.assertTrue(obs_migrate.parse_args(["--web-reload"]).web_reload)
 
     def test_should_start_web_ui_honors_flag_and_config(self):
         cfg = make_config(require_login=False)
@@ -963,6 +961,44 @@ class CliStartupTests(unittest.TestCase):
         task_manager.start.assert_not_called()
         wait_for_web.assert_called_once_with(server)
         server.stop.assert_called_once_with()
+
+    def test_main_web_reload_implies_web_and_uses_reload_waiter(self):
+        cfg = make_config(require_login=False)
+        cfg.set("WEB_UI", "enabled", "false")
+        task_manager = mock.Mock()
+        server = mock.Mock(url="http://127.0.0.1:8765/")
+
+        with mock.patch.object(obs_migrate, "ensure_dirs"):
+            with mock.patch.object(obs_migrate, "load_config", return_value=cfg):
+                with mock.patch.object(obs_migrate, "validate_config"):
+                    with mock.patch.object(obs_migrate, "_ensure_secret_fields_encrypted"):
+                        with mock.patch.object(obs_migrate, "TaskManager", return_value=task_manager):
+                            with mock.patch.object(obs_migrate, "WebConsoleServer", return_value=server):
+                                with mock.patch.object(obs_migrate, "_wait_for_web_console") as wait_for_web:
+                                    with mock.patch.object(obs_migrate, "_wait_for_web_console_reload", return_value=server) as wait_for_reload:
+                                        with redirect_stdout(io.StringIO()):
+                                            obs_migrate.main(["--web-reload"])
+
+        task_manager.start.assert_not_called()
+        wait_for_web.assert_not_called()
+        wait_for_reload.assert_called_once_with(server, cfg, task_manager)
+        server.stop.assert_called_once_with()
+
+    def test_web_reload_restarts_server_without_stopping_task_manager(self):
+        cfg = make_config(require_login=False)
+        task_manager = mock.Mock()
+        server = mock.Mock(url="http://127.0.0.1:8765/")
+        restarted = mock.Mock(url="http://127.0.0.1:8765/")
+
+        with mock.patch.object(obs_migrate, "_reload_web_modules") as reload_modules:
+            with mock.patch.object(obs_migrate, "_start_web_console", return_value=restarted) as start_web:
+                result = obs_migrate._restart_web_console_for_reload(server, cfg, task_manager)
+
+        self.assertIs(result, restarted)
+        reload_modules.assert_called_once_with()
+        server.stop.assert_called_once_with()
+        task_manager.stop.assert_not_called()
+        start_web.assert_called_once_with(cfg, task_manager)
 
     def test_main_web_enabled_config_load_skips_interactive_prompt(self):
         cfg = make_config(require_login=False)

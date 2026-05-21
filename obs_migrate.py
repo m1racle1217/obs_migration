@@ -5,6 +5,7 @@
 import argparse
 import configparser
 import glob
+import importlib
 import logging
 import os
 import queue
@@ -3630,6 +3631,7 @@ def run_migration(cfg, controls=None):
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="OBS / S3 migration tool")
     parser.add_argument("--web", action="store_true", help="启动 Web 控制台")
+    parser.add_argument("--web-reload", action="store_true", help="开发模式：Web UI 文件变更后自动重载控制台")
     return parser.parse_args(argv)
 
 
@@ -3714,12 +3716,69 @@ def _wait_for_web_console(server):
         print("\n收到退出请求，正在关闭 Web 控制台...")
 
 
+def _web_reload_watch_paths():
+    return [
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "core", "web_ui.py")),
+    ]
+
+
+def _web_reload_snapshot(paths=None):
+    snapshot = {}
+    for path in paths or _web_reload_watch_paths():
+        try:
+            snapshot[os.path.abspath(path)] = os.path.getmtime(path)
+        except OSError:
+            snapshot[os.path.abspath(path)] = None
+    return snapshot
+
+
+def _reload_web_modules():
+    import core.web_ui as web_ui_module
+
+    importlib.invalidate_caches()
+    reloaded = importlib.reload(web_ui_module)
+    globals()["WebConsoleServer"] = reloaded.WebConsoleServer
+
+
+def _restart_web_console_for_reload(server, cfg, task_manager):
+    print("检测到 Web UI 文件变更，正在重载控制台...")
+    _reload_web_modules()
+    if server is not None:
+        try:
+            server.stop()
+        except Exception as exc:
+            print(f"⚠️ 旧 Web 控制台关闭失败: {exc}")
+    return _start_web_console(cfg, task_manager)
+
+
+def _wait_for_web_console_reload(server, cfg, task_manager, poll_interval=0.5, watch_paths=None):
+    print("Web 控制台开发热重载已启用；修改 Web UI 后刷新浏览器即可看到新页面。")
+    watched = watch_paths or _web_reload_watch_paths()
+    snapshot = _web_reload_snapshot(watched)
+    try:
+        while True:
+            thread = getattr(server, "_thread", None)
+            if thread is not None and not thread.is_alive():
+                return server
+            time.sleep(poll_interval)
+            current = _web_reload_snapshot(watched)
+            if current != snapshot:
+                try:
+                    server = _restart_web_console_for_reload(server, cfg, task_manager)
+                except Exception as exc:
+                    print(f"⚠️ Web 控制台热重载失败，继续使用当前服务: {exc}")
+                snapshot = current
+    except KeyboardInterrupt:
+        print("\n收到退出请求，正在关闭 Web 控制台...")
+        return server
+
+
 def main(argv=None):
     ensure_dirs()
 
     args = parse_args(argv)
     cfg = load_config(prompt=False)
-    start_web = should_start_web_ui(cfg, args.web)
+    start_web = should_start_web_ui(cfg, args.web or args.web_reload)
     if not start_web and should_prompt_config(cfg):
         run_config_menu(cfg)
 
@@ -3733,7 +3792,10 @@ def main(argv=None):
     server = _start_web_console(cfg, task_manager)
     try:
         try:
-            _wait_for_web_console(server)
+            if args.web_reload:
+                server = _wait_for_web_console_reload(server, cfg, task_manager) or server
+            else:
+                _wait_for_web_console(server)
         except KeyboardInterrupt:
             print("\n收到退出请求，正在关闭 Web 控制台...")
         return None

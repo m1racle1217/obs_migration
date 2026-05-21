@@ -598,7 +598,7 @@ INDEX_HTML = r"""<!doctype html>
       color: var(--text);
       box-shadow: inset 0 0 0 1px rgba(96,165,250,.08), 0 10px 30px rgba(37,99,235,.14);
     }
-    .main { padding: 30px 34px 92px; }
+    .main { padding: 30px 34px 48px; }
     .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
     .top h1 { font-size: 40px; letter-spacing: -.045em; line-height: 1.06; margin: 12px 0 0; }
     .actions, .toolbar { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
@@ -614,7 +614,8 @@ INDEX_HTML = r"""<!doctype html>
       font-size: 12px;
       font-weight: 800;
     }
-    .task-grid { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 14px; align-items: start; }
+    .task-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; }
+    .task-grid.task-grid-has-detail { grid-template-columns: minmax(360px, 520px) minmax(0, 1fr); }
     .task-state-tabs, .log-tabs {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -837,7 +838,6 @@ INDEX_HTML = r"""<!doctype html>
       color: var(--soft);
     }
     .explorer-tree button:hover, .explorer-tree button.active { background: rgba(96,165,250,.13); border-color: rgba(96,165,250,.2); }
-    .profile-form { display: grid; gap: 8px; margin: 10px 0; }
     .profile-list { display: grid; gap: 7px; margin-top: 8px; }
     .profile-chip {
       width: 100%;
@@ -850,6 +850,28 @@ INDEX_HTML = r"""<!doctype html>
       text-align: left;
       cursor: pointer;
     }
+    .preset-manager {
+      display: grid;
+      gap: 14px;
+      margin: 14px 0;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(7,15,31,.72);
+    }
+    .preset-list { display: grid; gap: 8px; }
+    .preset-card {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px;
+      border: 1px solid rgba(96,165,250,.18);
+      border-radius: 12px;
+      background: rgba(96,165,250,.07);
+      color: var(--soft);
+    }
+    .preset-card strong, .preset-card span { display: block; }
+    .preset-card span { color: var(--muted); font-size: 12px; margin-top: 4px; word-break: break-all; }
     .explorer-main { min-width: 0; overflow: auto; background: rgba(2,8,20,.38); }
     .explorer-breadcrumbs {
       display: flex;
@@ -916,24 +938,10 @@ INDEX_HTML = r"""<!doctype html>
     .explorer-details summary { cursor: pointer; color: var(--muted); margin: 10px 0; }
     .worker-list { display: grid; gap: 8px; }
     .worker-item { border: 1px solid var(--line); border-radius: 12px; padding: 10px; color: var(--soft); background: rgba(96,165,250,.07); }
-    .status-bar {
-      position: fixed;
-      left: 282px;
-      right: 0;
-      bottom: 0;
-      border-top: 1px solid var(--line);
-      background: rgba(6,13,28,.88);
-      backdrop-filter: blur(18px);
-      padding: 14px 34px;
-      display: flex;
-      justify-content: space-between;
-      color: var(--muted);
-    }
     @media (max-width: 980px) {
       .login-card, .app-shell, .task-grid, .split { grid-template-columns: 1fr; }
       .login-hero { min-height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
       .sidebar { position: relative; height: auto; }
-      .status-bar { position: static; }
       .browser-window { min-height: 560px; }
       .explorer-addressbar, .explorer-layout { grid-template-columns: 1fr; }
       .explorer-tree { border-right: 0; border-bottom: 1px solid rgba(96,165,250,.16); }
@@ -977,7 +985,7 @@ INDEX_HTML = r"""<!doctype html>
         </div>
       </div>
 
-      <section id="dashboard" class="task-grid" data-page="dashboard">
+      <section id="dashboard" class="task-grid task-grid-full" data-page="dashboard">
         <aside class="panel">
           <div class="toolbar">
             <button id="new-task-button" class="primary" type="button">新增任务</button>
@@ -990,10 +998,10 @@ INDEX_HTML = r"""<!doctype html>
             <h2>新增任务配置</h2>
             <div class="split">
               <label>任务名 <input id="new-task-name" placeholder="例如：客户 A 迁移"></label>
-              <label>源存储位置 <select id="new-task-source-profile" aria-label="选择源存储位置"></select></label>
-              <label>目标存储位置 <select id="new-task-target-profile" aria-label="选择目标存储位置"></select></label>
-              <label>源路径 / Prefix <input id="new-task-source" placeholder="可手动填写，也可由存储位置或目录浏览填入"></label>
-              <label>目标 Prefix <input id="new-task-target" placeholder="可手动填写，也可由存储位置或目录浏览填入"></label>
+              <label>源位置预设 <select id="new-task-source-profile" aria-label="选择源位置预设"></select></label>
+              <label>目标位置预设 <select id="new-task-target-profile" aria-label="选择目标位置预设"></select></label>
+              <label>源路径 / Prefix <input id="new-task-source" placeholder="可手动填写，也可由位置预设或目录浏览填入"></label>
+              <label>目标 Prefix <input id="new-task-target" placeholder="可手动填写，也可由位置预设或目录浏览填入"></label>
               <label>上传线程 <input id="new-task-upload-workers" type="number" min="1" value="32"></label>
             </div>
             <button id="create-task" class="primary" type="button">保存到任务列表</button>
@@ -1027,12 +1035,31 @@ INDEX_HTML = r"""<!doctype html>
 
       <section id="config" class="panel" data-page="config">
         <h2>配置中心</h2>
-        <p class="muted">存储位置用于管理源存储位置、目标存储位置和位置预设；本地路径与 OBS/S3 对象存储会按存储类型自动切换。</p>
+        <p class="muted">位置预设用于给常用本地目录、OBS/S3 Bucket/Prefix 起名字；新增任务和目录浏览都按预设名称选择。</p>
         <div class="toolbar">
           <button id="reload-config" type="button">重新加载配置</button>
           <button id="save-config" class="primary" type="button">保存配置</button>
         </div>
-        <form id="config-form" class="config-grid" aria-label="配置编辑器"></form>
+        <section class="preset-manager" aria-label="位置预设管理">
+          <div>
+            <h2>位置预设</h2>
+            <p class="muted">输入路径时先保存一个名字，以后新增任务和目录浏览都直接按名字选择。</p>
+          </div>
+          <div id="position-preset-form" class="split">
+            <label>预设名称 <input id="position-preset-name" placeholder="例如：客户A源目录 / 生产目标桶"></label>
+            <label>用途 <select id="position-preset-role"><option value="source">源端</option><option value="target">目标端</option><option value="both">通用</option></select></label>
+            <label>存储类型 <select id="position-preset-type"><option value="local">本地路径</option><option value="remote">OBS/S3 对象存储</option></select></label>
+            <label>本地路径 <input id="position-preset-path" placeholder="D:\data 或 /mnt/data"></label>
+            <label>Endpoint <input id="position-preset-endpoint" placeholder="https://obs.xxx.com"></label>
+            <label>Bucket <input id="position-preset-bucket" placeholder="bucket-name"></label>
+            <label>Prefix <input id="position-preset-prefix" placeholder="root/prefix"></label>
+            <label>AccessKey <input id="position-preset-ak" autocomplete="off"></label>
+            <label>SecretKey <input id="position-preset-sk" type="password" autocomplete="new-password"></label>
+          </div>
+          <div class="toolbar"><button id="position-preset-save" class="primary" type="button">保存位置预设</button></div>
+          <div id="position-preset-list" class="preset-list" aria-label="已保存的位置预设"></div>
+        </section>
+        <form id="config-form" class="config-grid" aria-label="高级配置编辑器"></form>
         <div id="config-output" class="config-status" role="status" aria-live="polite">等待加载配置...</div>
       </section>
 
@@ -1040,8 +1067,8 @@ INDEX_HTML = r"""<!doctype html>
         <div class="browser-window">
           <div class="explorer-titlebar">
             <div>
-              <h2 id="browser-title">源端目录浏览</h2>
-              <div id="browser-context" class="browser-context">浏览源端目录，选择后加入迁移列表。</div>
+              <h2 id="browser-title">位置预设浏览</h2>
+              <div id="browser-context" class="browser-context">选择一个位置预设，就像打开资源管理器里的收藏位置。</div>
             </div>
             <div class="actions">
               <button id="browser-add-list" class="primary" type="button">加入迁移列表</button>
@@ -1049,34 +1076,18 @@ INDEX_HTML = r"""<!doctype html>
               <button id="browser-fill-task" type="button">填入任务配置</button>
             </div>
           </div>
-          <div class="browser-mode-switch" role="tablist" aria-label="目录浏览模式">
-            <button id="browser-mode-source" class="active" type="button" data-browser-mode="source">
-              <span class="browser-workspace-eyebrow">Step 01 · 源端选择</span>
-              <strong>浏览源端目录，选择要迁移的目录/对象</strong>
-              <small>可浏览本地目录或 SOURCE 远端；单击选中，双击进入，选中后加入迁移列表。</small>
-            </button>
-            <button id="browser-mode-target" type="button" data-browser-mode="target">
-              <span class="browser-workspace-eyebrow">Step 02 · 目的端选择</span>
-              <strong>浏览目的端目录，设置迁移落点</strong>
-              <small>进入 TARGET 远端目标目录后，点击“迁移到当前目录”写入新任务目标。</small>
-            </button>
-          </div>
           <div class="explorer-commandbar">
             <button id="browser-back" type="button" title="后退">后退</button>
             <button id="browser-forward" type="button" title="前进">前进</button>
             <button id="browser-up" type="button" title="上一级">上一级</button>
             <button id="browser-refresh" type="button" title="刷新">刷新</button>
-            <select id="browser-scope" aria-label="位置">
-              <option value="local">本地</option>
-              <option value="SOURCE">源端配置</option>
-              <option value="TARGET">目标端配置</option>
-            </select>
-            <label class="inline-select">选择存储位置
-              <select id="browser-profile-select" aria-label="选择存储位置">
-                <option value="">选择存储位置</option>
+            <input id="browser-scope" type="hidden" value="local">
+            <label class="inline-select">选择位置预设
+              <select id="browser-profile-select" aria-label="选择位置预设">
+                <option value="">选择位置预设后浏览</option>
               </select>
             </label>
-            <button id="browser-save-profile" type="button">保存为存储位置</button>
+            <button id="browser-save-profile" type="button">保存当前位置为预设</button>
             <input id="browser-filter" class="explorer-search" placeholder="搜索当前文件夹">
           </div>
           <div class="explorer-addressbar">
@@ -1085,21 +1096,12 @@ INDEX_HTML = r"""<!doctype html>
             <input id="browser-bucket" aria-label="Bucket" placeholder="Bucket（远端）">
             <button id="browser-go" type="button">转到</button>
           </div>
-          <div id="browser-mode-note" class="explorer-mode-note">当前是源端选择：选中目录或对象后，可以加入迁移列表。</div>
+          <div id="browser-mode-note" class="explorer-mode-note">先在上方选择一个位置预设；可作为源端迁移入口，也可作为目标落点。</div>
+          <div id="browser-profile-empty" class="explorer-mode-note hidden">暂无位置预设。请先到“配置中心”保存一个位置预设。</div>
           <div class="explorer-layout">
-            <aside class="explorer-tree" aria-label="资源位置">
-              <h3>快速访问</h3>
-              <button type="button" data-browser-scope="local" data-browser-path=".">本地源目录</button>
-              <button type="button" data-browser-scope="local" data-browser-path="..">上级目录</button>
-              <h3>对象存储</h3>
-              <button type="button" data-browser-scope="SOURCE" data-browser-path="">SOURCE 源端</button>
-              <button type="button" data-browser-scope="TARGET" data-browser-path="">TARGET 目的端</button>
-              <h3>存储位置库</h3>
-              <div id="profile-form" class="profile-form">
-                <input id="profile-name" placeholder="存储位置名称，例如 prod-source">
-                <button id="profile-save-current" type="button">保存当前存储位置</button>
-              </div>
-              <div id="profile-list" class="profile-list" aria-label="存储位置列表"></div>
+            <aside class="explorer-tree" aria-label="位置预设">
+              <h3>位置预设</h3>
+              <div id="profile-list" class="profile-list" aria-label="位置预设列表"></div>
             </aside>
             <div class="explorer-main">
               <div id="browser-breadcrumbs" class="explorer-breadcrumbs" aria-label="当前位置"></div>
@@ -1143,7 +1145,6 @@ INDEX_HTML = r"""<!doctype html>
         <pre id="task-report-output" class="hidden">请选择一个任务，或任务结束后查看报告。</pre>
       </section>
     </main>
-    <div class="status-bar"><span id="status-text">Operations Shell 就绪</span><span>API /api/tasks · /api/task/status · /api/task/start · /api/task/pause · /api/task/resume · /api/task/stop</span></div>
   </section>
 
   <script>
@@ -1158,15 +1159,12 @@ INDEX_HTML = r"""<!doctype html>
       logs: "日志 / 报告"
     };
     const CONFIG_SECTION_TITLES = {
-      SOURCE: "源存储位置",
-      TARGET: "目标存储位置",
       UPLOAD: "传输策略",
       SCAN: "扫描策略",
       CHECK: "校验策略",
       PATH: "路径与报告",
       UI: "CLI 界面",
-      WEB_UI: "Web 控制台",
-      BROWSER_PROFILES: "位置预设"
+      WEB_UI: "Web 控制台"
     };
     const CONFIG_FIELD_TITLES = {
       type: "存储类型",
@@ -1308,28 +1306,10 @@ INDEX_HTML = r"""<!doctype html>
       if (!item || item.kind !== "file") return "";
       return bytes(item.size || 0);
     }
-    function setBrowserMode(mode, shouldBrowse = true) {
-      browserMode = mode === "target" ? "target" : "source";
-      const sourceMode = browserMode === "source";
-      document.querySelectorAll("[data-browser-mode]").forEach(button => {
-        const active = button.dataset.browserMode === browserMode;
-        button.classList.toggle("active", active);
-        button.setAttribute("aria-selected", active ? "true" : "false");
-      });
-      browserTitle.textContent = sourceMode ? "源端目录浏览" : "目的端目录浏览";
-      browserContext.textContent = sourceMode ? "浏览源端目录，选择后加入迁移列表。" : "浏览目的端目录，把迁移目标设为当前目录。";
-      browserModeNote.textContent = sourceMode ? "当前是源端选择：选中目录或对象后，可以加入迁移列表；也可以填入新任务源路径。" : "当前是目的端选择：双击进入目标目录后，点击“迁移到当前目录”写入新任务目标。";
-      document.getElementById("browser-add-list").classList.toggle("hidden", !sourceMode);
-      document.getElementById("browser-fill-task").classList.toggle("hidden", !sourceMode);
-      document.getElementById("browser-set-target").classList.toggle("hidden", sourceMode);
-      const scopeInput = document.getElementById("browser-scope");
-      if (!sourceMode) {
-        scopeInput.value = "TARGET";
-      } else if (scopeInput.value === "TARGET") {
-        scopeInput.value = "SOURCE";
-      }
+    function refreshBrowserProfileChrome(shouldBrowse = true) {
       selectedBrowserItem = null;
       browserSelected.textContent = "未选择项目";
+      updateBrowserModeChrome();
       if (shouldBrowse) browse(true).catch(error => browserOutput.textContent = error.message);
     }
     function eta(seconds) {
@@ -1437,12 +1417,20 @@ INDEX_HTML = r"""<!doctype html>
     }
     function showTaskDetailPanel() {
       document.getElementById("task-detail-panel").classList.remove("hidden");
+      updateDashboardLayout();
     }
     function hideTaskDetailPanel() {
       document.getElementById("task-detail-panel").classList.add("hidden");
       dashboardMetrics.innerHTML = "";
       workerList.innerHTML = "";
       taskOutput.textContent = "";
+      updateDashboardLayout();
+    }
+    function updateDashboardLayout() {
+      const dashboard = document.getElementById("dashboard");
+      const hasDetail = !document.getElementById("task-detail-panel").classList.contains("hidden");
+      dashboard.classList.toggle("task-grid-full", !hasDetail);
+      dashboard.classList.toggle("task-grid-has-detail", hasDetail);
     }
     function syncLogTaskSelect(tasks) {
       if (!logTaskSelect) return;
@@ -1595,6 +1583,7 @@ INDEX_HTML = r"""<!doctype html>
     async function loadConfig(message = "配置已加载。修改后点击“保存配置”即可生效。") {
       const data = await api("/api/config");
       renderConfigEditor(data.config);
+      renderPositionPresetManager();
       setConfigOutput(message);
     }
     function setConfigOutput(message, isError = false) {
@@ -1603,7 +1592,7 @@ INDEX_HTML = r"""<!doctype html>
     }
     function renderConfigEditor(config) {
       configForm.innerHTML = "";
-      const sections = Object.entries(config || {});
+      const sections = Object.entries(config || {}).filter(([section]) => !["SOURCE", "TARGET", "BROWSER_PROFILES"].includes(section));
       const tabList = document.createElement("div");
       tabList.className = "config-tabs";
       tabList.setAttribute("role", "tablist");
@@ -1635,6 +1624,9 @@ INDEX_HTML = r"""<!doctype html>
         configForm.appendChild(fieldset);
         updateStorageFieldVisibility(section);
       });
+      if (!sections.length) {
+        configForm.innerHTML = "<p class='muted'>暂无高级配置项。</p>";
+      }
     }
     function configSectionTitle(section) {
       return CONFIG_SECTION_TITLES[section] || section;
@@ -1724,6 +1716,66 @@ INDEX_HTML = r"""<!doctype html>
       });
       return payload;
     }
+    function renderPositionPresetManager() {
+      const list = document.getElementById("position-preset-list");
+      if (!list) return;
+      list.innerHTML = "";
+      browserProfiles.forEach(profile => {
+        const card = document.createElement("div");
+        card.className = "preset-card";
+        card.innerHTML = `<div><strong>${escapeHtml(formatBrowserProfileLabel(profile))}</strong><span>${escapeHtml(browserProfilePath(profile) || "根目录")}</span></div><span>${escapeHtml(profile.endpoint || profile.bucket || profile.path || "")}</span>`;
+        list.appendChild(card);
+      });
+      if (!list.innerHTML) list.innerHTML = "<p class='muted'>暂无位置预设，请先保存一个常用路径。</p>";
+      updatePositionPresetFieldVisibility();
+    }
+    function updatePositionPresetFieldVisibility() {
+      const type = document.getElementById("position-preset-type");
+      if (!type) return;
+      const isLocal = type.value === "local";
+      ["position-preset-endpoint", "position-preset-bucket", "position-preset-prefix", "position-preset-ak", "position-preset-sk"].forEach(id => {
+        const label = document.getElementById(id)?.closest("label");
+        if (label) label.classList.toggle("hidden", isLocal);
+      });
+      const pathLabel = document.getElementById("position-preset-path")?.closest("label");
+      if (pathLabel) pathLabel.classList.toggle("hidden", !isLocal);
+    }
+    async function createPositionPreset() {
+      const name = document.getElementById("position-preset-name").value.trim();
+      if (!name) {
+        setConfigOutput("请先填写预设名称。", true);
+        return;
+      }
+      const type = document.getElementById("position-preset-type").value;
+      const role = document.getElementById("position-preset-role").value;
+      const profile = {
+        id: "profile-" + Date.now(),
+        name,
+        role,
+        type,
+        section: role === "target" ? "TARGET" : "SOURCE",
+        path: type === "local" ? document.getElementById("position-preset-path").value.trim() : "",
+        endpoint: type === "local" ? "" : document.getElementById("position-preset-endpoint").value.trim(),
+        bucket: type === "local" ? "" : document.getElementById("position-preset-bucket").value.trim(),
+        prefix: type === "local" ? "" : document.getElementById("position-preset-prefix").value.trim(),
+        ak: type === "local" ? "" : document.getElementById("position-preset-ak").value.trim(),
+        sk: type === "local" ? "" : document.getElementById("position-preset-sk").value
+      };
+      const data = await api("/api/browser/profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profiles: browserProfiles.concat([profile]) })
+      });
+      browserProfiles = data.profiles || [];
+      renderBrowserProfiles();
+      renderTaskProfileSelects();
+      renderPositionPresetManager();
+      ["position-preset-name", "position-preset-path", "position-preset-endpoint", "position-preset-bucket", "position-preset-prefix", "position-preset-ak", "position-preset-sk"].forEach(id => {
+        const field = document.getElementById(id);
+        if (field) field.value = "";
+      });
+      setConfigOutput("位置预设已保存。");
+    }
     async function saveConfig() {
       await api("/api/config", {
         method: "POST",
@@ -1733,16 +1785,32 @@ INDEX_HTML = r"""<!doctype html>
       await loadConfig("配置已保存。敏感字段会自动保留或加密，不在页面展示原始值。");
     }
     function browserLocation() {
+      const profile = selectedBrowserProfile();
+      const scope = profile ? browserProfileScope(profile) : document.getElementById("browser-scope").value;
       return {
-        scope: document.getElementById("browser-scope").value,
-        path: document.getElementById("browser-path").value || ".",
-        bucket: document.getElementById("browser-bucket").value,
-        profile_id: document.getElementById("browser-profile-select").value,
+        scope,
+        path: document.getElementById("browser-path").value || (profile && (profile.path || profile.prefix)) || ".",
+        bucket: document.getElementById("browser-bucket").value || (profile && profile.bucket) || "",
+        profile_id: profile ? profile.id : "",
         filter: document.getElementById("browser-filter").value
       };
     }
+    function selectedBrowserProfile() {
+      const profileId = document.getElementById("browser-profile-select").value;
+      return browserProfiles.find(profile => profile.id === profileId) || null;
+    }
+    function browserProfileScope(profile) {
+      if (!profile) return "local";
+      if (profile.type === "local") return "local";
+      if (profile.section === "TARGET" || profile.role === "target") return "TARGET";
+      return "SOURCE";
+    }
     async function browse(pushHistory = true) {
       const loc = browserLocation();
+      if (!loc.profile_id) {
+        renderBrowserEmpty();
+        return;
+      }
       browserMode = loc.scope === "TARGET" ? "target" : "source";
       updateBrowserModeChrome();
       if (pushHistory) {
@@ -1764,11 +1832,20 @@ INDEX_HTML = r"""<!doctype html>
       }
       renderBrowser(data.page);
     }
+    function renderBrowserEmpty() {
+      browserStatus.textContent = "请选择位置预设";
+      browserSelected.textContent = "未选择位置预设";
+      browserBody.innerHTML = "";
+      browserBreadcrumbs.innerHTML = "";
+      browserOutput.textContent = "请选择一个位置预设后浏览。";
+      document.getElementById("browser-profile-empty").classList.toggle("hidden", browserProfiles.length > 0);
+    }
     async function loadBrowserProfiles() {
       const data = await api("/api/browser/profiles");
       browserProfiles = data.profiles || [];
       renderBrowserProfiles();
       renderTaskProfileSelects();
+      renderPositionPresetManager();
     }
     function renderTaskProfileSelects() {
       renderTaskProfileSelect("source", document.getElementById("new-task-source-profile"));
@@ -1794,7 +1871,7 @@ INDEX_HTML = r"""<!doctype html>
       const list = document.getElementById("profile-list");
       if (!select || !list) return;
       const current = select.value;
-      select.innerHTML = "<option value=''>选择存储位置</option>";
+      select.innerHTML = "<option value=''>选择位置预设后浏览</option>";
       list.innerHTML = "";
       browserProfiles.forEach(profile => {
         const option = document.createElement("option");
@@ -1808,12 +1885,13 @@ INDEX_HTML = r"""<!doctype html>
         list.appendChild(chip);
       });
       if (current && browserProfiles.some(profile => profile.id === current)) select.value = current;
-      if (!list.innerHTML) list.innerHTML = "<p class='muted'>暂无保存的存储位置。</p>";
+      if (!list.innerHTML) list.innerHTML = "<p class='muted'>暂无保存的位置预设。</p>";
+      document.getElementById("browser-profile-empty")?.classList.toggle("hidden", browserProfiles.length > 0);
     }
     function formatBrowserProfileLabel(profile) {
       const roleMap = { source: "源端", target: "目标端", both: "通用" };
       const typeMap = { local: "本地", remote: "OBS/S3", obs: "OBS/S3", s3: "OBS/S3" };
-      const name = profile.name || profile.id || "未命名存储位置";
+      const name = profile.name || profile.id || "未命名位置预设";
       const role = roleMap[profile.role] || (profile.section === "TARGET" ? "目标端" : "源端");
       const type = typeMap[profile.type] || "本地";
       return `${name} · ${role} · ${type}`;
@@ -1832,13 +1910,13 @@ INDEX_HTML = r"""<!doctype html>
       if (!profile) return;
       const input = document.getElementById(role === "target" ? "new-task-target" : "new-task-source");
       if (input) input.value = browserProfileTaskPath(profile);
-      setStatus(`${role === "target" ? "目标" : "源"}存储位置已选择：${profile.name || profile.id}`);
+      setStatus(`${role === "target" ? "目标" : "源"}位置预设已选择：${profile.name || profile.id}`);
     }
     function applyBrowserProfile(profileId) {
       const profile = browserProfiles.find(item => item.id === profileId);
       if (!profile) return;
       document.getElementById("browser-profile-select").value = profile.id;
-      document.getElementById("browser-scope").value = profile.section || (profile.role === "target" ? "TARGET" : (profile.type === "local" ? "local" : "SOURCE"));
+      document.getElementById("browser-scope").value = browserProfileScope(profile);
       document.getElementById("browser-path").value = profile.path || profile.prefix || "";
       document.getElementById("browser-bucket").value = profile.bucket || "";
       browserMode = document.getElementById("browser-scope").value === "TARGET" ? "target" : "source";
@@ -1866,20 +1944,17 @@ INDEX_HTML = r"""<!doctype html>
       browserProfiles = data.profiles || [];
       renderBrowserProfiles();
       renderTaskProfileSelects();
+      renderPositionPresetManager();
       document.getElementById("browser-profile-select").value = profile.id;
       if (nameInput) nameInput.value = "";
-      setStatus("存储位置已保存");
+      setStatus("位置预设已保存");
     }
     function updateBrowserModeChrome() {
       const sourceMode = browserMode !== "target";
-      document.querySelectorAll("[data-browser-mode]").forEach(button => {
-        const active = button.dataset.browserMode === browserMode;
-        button.classList.toggle("active", active);
-        button.setAttribute("aria-selected", active ? "true" : "false");
-      });
-      browserTitle.textContent = sourceMode ? "源端目录浏览" : "目的端目录浏览";
-      browserContext.textContent = sourceMode ? "浏览源端目录，选择后加入迁移列表。" : "浏览目的端目录，把迁移目标设为当前目录。";
-      browserModeNote.textContent = sourceMode ? "当前是源端选择：选中目录或对象后，可以加入迁移列表；也可以填入新任务源路径。" : "当前是目的端选择：双击进入目标目录后，点击“迁移到当前目录”写入新任务目标。";
+      const profile = selectedBrowserProfile();
+      browserTitle.textContent = "位置预设浏览";
+      browserContext.textContent = profile ? `正在浏览位置预设：${profile.name || profile.id}` : "选择位置预设后浏览其中的目录或对象。";
+      browserModeNote.textContent = sourceMode ? "当前预设可作为源端迁移入口：勾选目录或对象后加入迁移列表，也可以填入新任务源路径。" : "当前预设可作为目标落点：进入目标目录后，点击“迁移到当前目录”写入新任务目标。";
       document.getElementById("browser-add-list").classList.toggle("hidden", !sourceMode);
       document.getElementById("browser-fill-task").classList.toggle("hidden", !sourceMode);
       document.getElementById("browser-set-target").classList.toggle("hidden", sourceMode);
@@ -1889,15 +1964,11 @@ INDEX_HTML = r"""<!doctype html>
       const bucket = page.bucket || document.getElementById("browser-bucket").value || "";
       const rawPath = page.prefix !== undefined ? page.prefix : (page.path || document.getElementById("browser-path").value || "");
       const parts = [];
-      parts.push(scope === "local" ? "此电脑" : scope);
+      const profile = selectedBrowserProfile();
+      parts.push(profile ? (profile.name || profile.id || "位置预设") : (scope === "local" ? "此电脑" : "位置预设"));
       if (bucket) parts.push(bucket);
       String(rawPath || "").replace(/\\/g, "/").split("/").filter(Boolean).forEach(part => parts.push(part));
       browserBreadcrumbs.innerHTML = parts.map(part => `<span>${escapeHtml(part)}</span>`).join("<b>›</b>");
-    }
-    function syncBrowserTree(scope) {
-      document.querySelectorAll("[data-browser-scope]").forEach(button => {
-        button.classList.toggle("active", button.dataset.browserScope === scope);
-      });
     }
     function renderBrowser(page) {
       selectedBrowserItem = null;
@@ -1908,7 +1979,6 @@ INDEX_HTML = r"""<!doctype html>
       if (page.prefix !== undefined) document.getElementById("browser-path").value = page.prefix || "";
       browserSelected.textContent = browserMode === "target" ? "当前目标目录：" + (currentBrowserDirectory() || "未设置") : "未选择项目";
       renderBreadcrumbs(page);
-      syncBrowserTree(document.getElementById("browser-scope").value);
       browserBody.innerHTML = "";
       const items = (page.items || []).slice().sort((left, right) => {
         const leftRank = left.kind === "file" ? 1 : 0;
@@ -2090,17 +2160,14 @@ INDEX_HTML = r"""<!doctype html>
     document.getElementById("save-concurrency").addEventListener("click", () => saveConcurrency().catch(error => setStatus(error.message)));
     document.getElementById("reload-config").addEventListener("click", () => loadConfig().catch(error => setConfigOutput("配置加载失败：" + error.message, true)));
     document.getElementById("save-config").addEventListener("click", () => saveConfig().catch(error => setConfigOutput("配置保存失败：" + error.message, true)));
+    document.getElementById("position-preset-type").addEventListener("change", updatePositionPresetFieldVisibility);
+    document.getElementById("position-preset-save").addEventListener("click", () => createPositionPreset().catch(error => setConfigOutput("位置预设保存失败：" + error.message, true)));
     document.getElementById("browser-refresh").addEventListener("click", () => browse(true).catch(error => browserOutput.textContent = error.message));
     document.getElementById("browser-go").addEventListener("click", () => browse(true).catch(error => browserOutput.textContent = error.message));
     document.getElementById("browser-profile-select").addEventListener("change", event => {
       if (event.target.value) applyBrowserProfile(event.target.value);
     });
     document.getElementById("browser-save-profile").addEventListener("click", () => saveCurrentBrowserProfile().catch(error => browserOutput.textContent = error.message));
-    document.getElementById("profile-save-current").addEventListener("click", () => saveCurrentBrowserProfile().catch(error => browserOutput.textContent = error.message));
-    document.getElementById("browser-scope").addEventListener("change", () => {
-      browserMode = document.getElementById("browser-scope").value === "TARGET" ? "target" : "source";
-      browse(true).catch(error => browserOutput.textContent = error.message);
-    });
     document.getElementById("browser-filter").addEventListener("keydown", event => {
       if (event.key === "Enter") browse(true).catch(error => browserOutput.textContent = error.message);
     });
@@ -2110,18 +2177,6 @@ INDEX_HTML = r"""<!doctype html>
     document.getElementById("browser-add-list").addEventListener("click", () => addSelectedToList().catch(error => browserOutput.textContent = error.message));
     document.getElementById("browser-set-target").addEventListener("click", setTargetDirectoryFromBrowser);
     document.getElementById("browser-fill-task").addEventListener("click", fillSelectedTaskConfig);
-    document.querySelectorAll("[data-browser-mode]").forEach(button => {
-      button.addEventListener("click", () => setBrowserMode(button.dataset.browserMode));
-    });
-    document.querySelectorAll("[data-browser-scope]").forEach(button => {
-      button.addEventListener("click", () => {
-        document.getElementById("browser-scope").value = button.dataset.browserScope;
-        document.getElementById("browser-path").value = button.dataset.browserPath || "";
-        if (button.dataset.browserScope === "local") document.getElementById("browser-bucket").value = "";
-        browserMode = button.dataset.browserScope === "TARGET" ? "target" : "source";
-        browse(true).catch(error => browserOutput.textContent = error.message);
-      });
-    });
     window.addEventListener("hashchange", () => showPage());
     if (localStorage.getItem(AUTH_KEY)) {
       bootApp().catch(() => showLogin("登录已过期，请重新登录。"));
