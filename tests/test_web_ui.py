@@ -984,6 +984,28 @@ class CliStartupTests(unittest.TestCase):
         wait_for_reload.assert_called_once_with(server, cfg, task_manager)
         server.stop.assert_called_once_with()
 
+    def test_main_web_reload_skips_migration_list_validation(self):
+        cfg = make_config(require_login=False)
+        cfg.set("WEB_UI", "enabled", "false")
+        cfg.set("SOURCE", "type", "local")
+        cfg.set("SOURCE", "selection_mode", "list")
+        cfg.set("PATH", "migration_list_file", "./missing-list.txt")
+        task_manager = mock.Mock()
+        server = mock.Mock(url="http://127.0.0.1:8765/")
+
+        with mock.patch.object(obs_migrate, "ensure_dirs"):
+            with mock.patch.object(obs_migrate, "load_config", return_value=cfg):
+                with mock.patch.object(obs_migrate, "validate_config", side_effect=AssertionError("migration validation")):
+                    with mock.patch.object(obs_migrate, "_ensure_secret_fields_encrypted"):
+                        with mock.patch.object(obs_migrate, "TaskManager", return_value=task_manager):
+                            with mock.patch.object(obs_migrate, "WebConsoleServer", return_value=server):
+                                with mock.patch.object(obs_migrate, "_wait_for_web_console_reload", return_value=server):
+                                    with redirect_stdout(io.StringIO()):
+                                        obs_migrate.main(["--web-reload"])
+
+        task_manager.start.assert_not_called()
+        server.stop.assert_called_once_with()
+
     def test_web_reload_restarts_server_without_stopping_task_manager(self):
         cfg = make_config(require_login=False)
         task_manager = mock.Mock()

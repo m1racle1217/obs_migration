@@ -3782,7 +3782,8 @@ def main(argv=None):
     if not start_web and should_prompt_config(cfg):
         run_config_menu(cfg)
 
-    validate_config(cfg)
+    if not start_web:
+        validate_config(cfg)
     _ensure_secret_fields_encrypted(cfg)
 
     if not start_web:
