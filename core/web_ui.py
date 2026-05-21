@@ -455,7 +455,7 @@ INDEX_HTML = r"""<!doctype html>
         linear-gradient(180deg, #0b1324 0%, #050814 100%);
       color: var(--text);
       font-family: var(--font);
-      font-size: 14px;
+      font-size: 13px;
       overflow-x: hidden;
     }
     body::before {
@@ -474,24 +474,36 @@ INDEX_HTML = r"""<!doctype html>
     button, input, select, textarea { font: inherit; }
     button {
       min-height: 42px;
-      border: 1px solid transparent;
+      border: 1px solid rgba(147,197,253,.18);
       border-radius: 999px;
       padding: 0 16px;
       font-weight: 760;
       cursor: pointer;
-      color: var(--text);
-      background: rgba(96, 165, 250, .1);
-      border-color: var(--line);
+      color: var(--soft);
+      background: rgba(8,17,34,.28);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.015);
+      transition: transform .18s ease, border-color .18s ease, background .18s ease, box-shadow .18s ease, color .18s ease;
     }
     button.primary {
-      background: linear-gradient(135deg, #eff6ff, #93c5fd 60%, #60a5fa);
-      color: #06111f;
-      box-shadow: 0 12px 34px rgba(96,165,250,.28);
+      border-color: rgba(147,197,253,.3);
+      color: #dbeafe;
+      background: rgba(37,99,235,.12);
     }
     button.danger {
-      background: rgba(251, 113, 133, .14);
-      border-color: rgba(251, 113, 133, .42);
-      color: #ffe4e9;
+      background: rgba(127,29,29,.12);
+      border-color: rgba(251,113,133,.26);
+      color: #fecdd3;
+    }
+    button:hover:not(:disabled), button.confirm-pending {
+      color: #f8fbff;
+      border-color: rgba(147,197,253,.72);
+      background: linear-gradient(135deg, rgba(96,165,250,.28), rgba(14,165,233,.18) 48%, rgba(129,140,248,.24));
+      box-shadow: 0 0 0 1px rgba(147,197,253,.14), 0 14px 34px rgba(37,99,235,.18), inset 0 1px 0 rgba(255,255,255,.08);
+      transform: translateY(-1px);
+    }
+    button.danger:hover:not(:disabled), button.danger.confirm-pending {
+      border-color: rgba(251,113,133,.66);
+      background: linear-gradient(135deg, rgba(251,113,133,.22), rgba(96,165,250,.14) 52%, rgba(168,85,247,.18));
     }
     button:disabled { opacity: .48; cursor: not-allowed; }
     input, select, textarea {
@@ -536,7 +548,7 @@ INDEX_HTML = r"""<!doctype html>
       font-weight: 900;
     }
     .eyebrow { color: var(--cyan); font-size: 12px; font-weight: 850; letter-spacing: .12em; text-transform: uppercase; }
-    .login-hero h1 { font-size: clamp(38px, 5vw, 54px); line-height: 1.04; letter-spacing: -.047em; margin: 16px 0 18px; }
+    .login-hero h1 { font-size: clamp(34px, 4.6vw, 50px); line-height: 1.04; letter-spacing: -.047em; margin: 16px 0 18px; }
     .muted { color: var(--muted); line-height: 1.75; }
     .signal { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
     .fact, .panel, .task-card, .metric-card {
@@ -559,7 +571,7 @@ INDEX_HTML = r"""<!doctype html>
     }
     .fact { padding: 15px; }
     .fact span, .metric-card span { display: block; color: var(--muted); font-size: 12px; }
-    .fact strong, .metric-card strong { display: block; margin-top: 8px; font-size: 24px; letter-spacing: -.035em; }
+    .fact strong, .metric-card strong { display: block; margin-top: 8px; font-size: 22px; letter-spacing: -.035em; }
     .login-form { display: flex; flex-direction: column; justify-content: center; gap: 16px; padding: 34px; }
     .login-form .status-pill { display: none; }
     .login-form h2 { font-size: 26px; letter-spacing: -.035em; margin: 0 0 6px; text-align: center; }
@@ -600,7 +612,7 @@ INDEX_HTML = r"""<!doctype html>
     }
     .main { padding: 30px 34px 48px; }
     .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
-    .top h1 { font-size: 40px; letter-spacing: -.045em; line-height: 1.06; margin: 12px 0 0; }
+    .top h1 { font-size: 36px; letter-spacing: -.045em; line-height: 1.06; margin: 12px 0 0; }
     .actions, .toolbar { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
     .status-pill {
       display: inline-flex;
@@ -630,8 +642,9 @@ INDEX_HTML = r"""<!doctype html>
       border-color: rgba(96,165,250,.16);
     }
     .task-state-tabs button.active, .log-tabs button.active {
-      color: #06111f;
-      background: linear-gradient(135deg, #eff6ff, #93c5fd 60%, #60a5fa);
+      color: #eaf6ff;
+      border-color: rgba(147,197,253,.48);
+      background: rgba(96,165,250,.15);
     }
     .task-list { display: grid; gap: 10px; }
     .task-editor {
@@ -690,11 +703,7 @@ INDEX_HTML = r"""<!doctype html>
       background: rgba(96,165,250,.07);
       border-color: rgba(96,165,250,.16);
     }
-    .config-tab.active {
-      color: #06111f;
-      background: linear-gradient(135deg, #eff6ff, #93c5fd 60%, #60a5fa);
-      box-shadow: 0 10px 26px rgba(96,165,250,.2);
-    }
+    .config-tab.active { color: #eaf6ff; border-color: rgba(147,197,253,.48); background: rgba(96,165,250,.15); }
     .config-panel {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -908,8 +917,10 @@ INDEX_HTML = r"""<!doctype html>
     }
     .preset-list { display: grid; gap: 8px; }
     .preset-card {
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
       justify-content: space-between;
+      align-items: start;
       gap: 12px;
       padding: 12px;
       border: 1px solid rgba(96,165,250,.18);
@@ -932,6 +943,9 @@ INDEX_HTML = r"""<!doctype html>
     .preset-group-body { display: grid; gap: 8px; padding: 10px; }
     .preset-card { cursor: pointer; }
     .preset-card-details { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(96,165,250,.14); color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .preset-detail-grid { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 7px 10px; }
+    .preset-detail-grid dt { margin: 0; color: #93c5fd; font-weight: 850; }
+    .preset-detail-grid dd { margin: 0; word-break: break-all; }
     .preset-actions { display: flex; gap: 8px; align-items: center; }
     .preset-actions button { min-height: 32px; border-radius: 9px; padding: 0 10px; font-size: 12px; }
     .modal-backdrop {
@@ -1759,8 +1773,10 @@ INDEX_HTML = r"""<!doctype html>
       }
     }
     async function batchDeleteTasks() {
+      const deleteButton = document.getElementById("batch-delete-tasks");
       const taskIds = checkedTaskIds();
       if (!taskIds.length) {
+        resetBatchDeleteConfirm();
         setStatus("请先勾选要删除的任务。");
         return;
       }
@@ -1769,22 +1785,33 @@ INDEX_HTML = r"""<!doctype html>
         pendingBatchDeleteSignature = signature;
         if (pendingBatchDeleteTimer) window.clearTimeout(pendingBatchDeleteTimer);
         pendingBatchDeleteTimer = window.setTimeout(() => {
-          pendingBatchDeleteSignature = "";
-          pendingBatchDeleteTimer = null;
+          resetBatchDeleteConfirm();
         }, 5000);
+        if (deleteButton) {
+          deleteButton.textContent = `确认删除 ${taskIds.length}`;
+          deleteButton.classList.add("confirm-pending");
+        }
         setStatus(`再次点击“批量删除”确认删除 ${taskIds.length} 个任务；运行中的任务会先请求停止。`);
         return;
       }
-      pendingBatchDeleteSignature = "";
-      if (pendingBatchDeleteTimer) {
-        window.clearTimeout(pendingBatchDeleteTimer);
-        pendingBatchDeleteTimer = null;
-      }
+      resetBatchDeleteConfirm();
       for (const taskId of taskIds) {
         await deleteTask(taskId);
       }
       setStatus(`已删除 ${taskIds.length} 个任务。`);
       await loadTasks();
+    }
+    function resetBatchDeleteConfirm() {
+      pendingBatchDeleteSignature = "";
+      if (pendingBatchDeleteTimer) {
+        window.clearTimeout(pendingBatchDeleteTimer);
+        pendingBatchDeleteTimer = null;
+      }
+      const deleteButton = document.getElementById("batch-delete-tasks");
+      if (deleteButton) {
+        deleteButton.textContent = "批量删除";
+        deleteButton.classList.remove("confirm-pending");
+      }
     }
     function concurrencyValue(id, key) {
       const field = document.getElementById(id);
@@ -2067,13 +2094,17 @@ INDEX_HTML = r"""<!doctype html>
       card.className = "preset-card";
       const expanded = expandedPresetId === profile.id;
       card.innerHTML = `
-        <div>
+        <div class="preset-card-main">
           <strong>${escapeHtml(formatBrowserProfileLabel(profile))}</strong>
           <span>${escapeHtml(browserProfilePath(profile) || "根目录")}</span>
           <div class="preset-card-details ${expanded ? "" : "hidden"}">
-            <div>Endpoint：${escapeHtml(profile.endpoint || "本地")}</div>
-            <div>Bucket：${escapeHtml(profile.bucket || "-")}</div>
-            <div>Prefix / 路径：${escapeHtml(browserProfilePath(profile) || "-")}</div>
+            <dl class="preset-detail-grid">
+              <dt>用途</dt><dd>${escapeHtml(normalizedProfileRole(profile) === "source" ? "源端" : normalizedProfileRole(profile) === "target" ? "目的端" : "通用")}</dd>
+              <dt>类型</dt><dd>${escapeHtml(String(profile.type || "local").toUpperCase())}</dd>
+              <dt>Endpoint</dt><dd>${escapeHtml(profile.endpoint || "本地路径")}</dd>
+              <dt>Bucket</dt><dd>${escapeHtml(profile.bucket || "-")}</dd>
+              <dt>路径 / Prefix</dt><dd>${escapeHtml(browserProfilePath(profile) || "-")}</dd>
+            </dl>
           </div>
         </div>
         <div class="preset-actions">

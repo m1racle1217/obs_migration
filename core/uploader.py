@@ -383,6 +383,14 @@ class OBSUploader:
             time.sleep(min(0.05, max(deadline - time.time(), 0.0)))
         return self._stop_requested()
 
+    def _honor_controls(self, detail="upload", heartbeat=None):
+        if self.controls is not None:
+            self.controls.wait_if_paused(poll_interval=0.05)
+        if heartbeat is not None:
+            heartbeat(detail)
+        if self._stop_requested():
+            raise TaskAbortedError("task stopped")
+
     # ================================
     # 构建任务上下文
     # ================================
@@ -825,7 +833,15 @@ class OBSUploader:
         self._ensure_parent_dir(target_path)
 
         try:
-            shutil.copy2(source_path, part_path)
+            self._honor_controls(detail="copy")
+            with open(source_path, "rb") as source, open(part_path, "wb") as target:
+                while True:
+                    self._honor_controls(detail="copy")
+                    chunk = source.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    target.write(chunk)
+            shutil.copystat(source_path, part_path, follow_symlinks=False)
             os.replace(part_path, target_path)
             return SimpleNamespace(status=200)
         except Exception:
@@ -947,11 +963,11 @@ class OBSUploader:
         self._ensure_parent_dir(target_path)
 
         try:
+            self._honor_controls(detail="download", heartbeat=heartbeat)
             stream = self._open_source_stream(source_bucket, source_key, heartbeat=heartbeat)
             with open(part_path, "wb") as handle:
                 while True:
-                    if heartbeat is not None:
-                        heartbeat("download")
+                    self._honor_controls(detail="download", heartbeat=heartbeat)
                     chunk = stream.read(8 * 1024 * 1024)
                     if not chunk:
                         break
@@ -1371,10 +1387,7 @@ class OBSUploader:
         state = {"last": 0}
 
         def callback(transferred, total_amount=None, total_seconds=None):
-            if self.controls is not None:
-                self.controls.wait_if_paused(poll_interval=0.05)
-            if self._stop_requested():
-                raise TaskAbortedError("task stopped")
+            self._honor_controls(detail=detail, heartbeat=heartbeat)
 
             try:
                 current = max(int(transferred or 0), 0)

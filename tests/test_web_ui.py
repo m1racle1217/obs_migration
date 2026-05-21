@@ -809,6 +809,8 @@ class WebConsoleServerTests(unittest.TestCase):
             'id="batch-resume-tasks"',
             'id="batch-stop-tasks"',
             'id="batch-delete-tasks"',
+            'confirm-pending',
+            'function resetBatchDeleteConfirm',
             'selectedTaskIds',
             'class="task-check"',
             'data-task-action="start"',
@@ -837,6 +839,8 @@ class WebConsoleServerTests(unittest.TestCase):
             'function renderPositionPresetManager',
             'function createPositionPreset',
             'function createPresetCard',
+            'class="preset-card-main"',
+            'class="preset-detail-grid',
             'function deletePositionPreset',
             'function openPositionPresetModal',
             'function closePositionPresetModal',
@@ -915,9 +919,24 @@ class WebConsoleServerTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertIn("pendingBatchDeleteSignature", html)
+        self.assertIn("确认删除 ${taskIds.length}", html)
         self.assertIn("再次点击“批量删除”确认删除", html)
         batch_delete_block = html.split("async function batchDeleteTasks()", 1)[1].split("function concurrencyValue", 1)[0]
         self.assertNotIn("window.confirm", batch_delete_block)
+
+    def test_static_page_uses_quieter_hover_first_buttons(self):
+        _server, client, _saved, _cfg = self.make_server()
+
+        status, html, _headers = client.request("GET", "/")
+
+        self.assertEqual(status, 200)
+        self.assertIn("button:hover:not(:disabled)", html)
+        self.assertIn("linear-gradient(135deg, rgba(96,165,250,.28)", html)
+        self.assertIn("font-size: 13px;", html)
+        button_block = html.split("button {", 1)[1].split("}", 1)[0]
+        self.assertIn("background: rgba(8,17,34,.28);", button_block)
+        primary_block = html.split("button.primary {", 1)[1].split("}", 1)[0]
+        self.assertNotIn("#eff6ff", primary_block)
 
     def test_config_reload_returns_current_payload(self):
         _server, client, _saved, cfg = self.make_server()

@@ -659,6 +659,28 @@ class UploaderTests(unittest.TestCase):
             with self.assertRaises(TaskAbortedError):
                 callback(256, 1024, 0.2)
 
+    def test_local_copy_aborts_before_copy_when_stop_requested(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_file = root / "src" / "payload.bin"
+            target_file = root / "dst" / "payload.bin"
+            source_file.parent.mkdir(parents=True, exist_ok=True)
+            source_file.write_bytes(b"payload")
+            controls = TaskControls()
+            controls.stop_event.set()
+            uploader = OBSUploader(
+                Progress(),
+                SimpleNamespace(),
+                failed_dir=str(root / "failed"),
+                controls=controls,
+            )
+
+            with self.assertRaises(TaskAbortedError):
+                uploader._copy_local_file_to_local(str(source_file), str(target_file))
+
+            self.assertFalse(target_file.exists())
+            self.assertFalse(Path(str(target_file) + ".part").exists())
+
     # ================================
     # 验证失败重试次数受配置控制
     # ================================
