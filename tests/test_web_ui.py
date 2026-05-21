@@ -974,6 +974,9 @@ class WebConsoleServerTests(unittest.TestCase):
         button_block = html.split("button {", 1)[1].split("}", 1)[0]
         self.assertIn("border-radius: 12px;", button_block)
         self.assertIn("rgba(var(--button-rgb), .065)", button_block)
+        self.assertIn(".login-form { display: flex; flex-direction: column; justify-content: center; gap: 22px; padding: 38px 36px; }", html)
+        self.assertIn(".login-form .muted { margin: 0;", html)
+        self.assertIn(".login-form label { gap: 11px; }", html)
         self.assertIn('[data-task-filter="running"]', html)
         self.assertIn("#batch-delete-tasks { --button-rgb", html)
         primary_block = html.split("button.primary {", 1)[1].split("}", 1)[0]

@@ -596,11 +596,13 @@ INDEX_HTML = r"""<!doctype html>
     .fact { padding: 15px; }
     .fact span, .metric-card span { display: block; color: var(--muted); font-size: 12px; }
     .fact strong, .metric-card strong { display: block; margin-top: 8px; font-size: 22px; letter-spacing: -.035em; }
-    .login-form { display: flex; flex-direction: column; justify-content: center; gap: 16px; padding: 34px; }
+    .login-form { display: flex; flex-direction: column; justify-content: center; gap: 22px; padding: 38px 36px; }
     .login-form .status-pill { display: none; }
-    .login-form h2 { font-size: 26px; letter-spacing: -.035em; margin: 0 0 6px; text-align: center; }
-    .login-form .muted { margin: -4px 0 2px; text-align: center; }
+    .login-form h2 { font-size: 26px; letter-spacing: -.035em; margin: 0; text-align: center; }
+    .login-form .muted { margin: 0; text-align: center; }
     .login-form .muted:empty { display: none; }
+    .login-form label { gap: 11px; }
+    .login-form button { margin-top: 2px; }
     .app-shell { min-height: 100dvh; display: grid; grid-template-columns: 274px minmax(0, 1fr); position: relative; }
     .sidebar {
       height: 100dvh;
