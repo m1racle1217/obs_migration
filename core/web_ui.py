@@ -696,6 +696,21 @@ INDEX_HTML = r"""<!doctype html>
       font-family: ui-monospace, Consolas, monospace;
       white-space: pre-wrap;
     }
+    .config-status {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border: 1px solid rgba(96,165,250,.22);
+      border-radius: 14px;
+      background: rgba(15,23,42,.58);
+      color: #bfdbfe;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .config-status.error {
+      border-color: rgba(248,113,113,.42);
+      color: #fecaca;
+      background: rgba(127,29,29,.22);
+    }
     .log-toolbar {
       display: flex;
       align-items: center;
@@ -1016,7 +1031,7 @@ INDEX_HTML = r"""<!doctype html>
           <button id="save-config" class="primary" type="button">保存配置</button>
         </div>
         <form id="config-form" class="config-grid" aria-label="配置编辑器"></form>
-        <pre id="config-output">等待加载配置...</pre>
+        <div id="config-output" class="config-status" role="status" aria-live="polite">等待加载配置...</div>
       </section>
 
       <section id="browser" class="panel" data-page="browser">
@@ -1538,10 +1553,14 @@ INDEX_HTML = r"""<!doctype html>
       document.getElementById("task-editor").classList.add("hidden");
       await loadTasks();
     }
-    async function loadConfig() {
+    async function loadConfig(message = "配置已加载。修改后点击“保存配置”即可生效。") {
       const data = await api("/api/config");
       renderConfigEditor(data.config);
-      configOutput.textContent = JSON.stringify(data.config, null, 2);
+      setConfigOutput(message);
+    }
+    function setConfigOutput(message, isError = false) {
+      configOutput.textContent = message;
+      configOutput.classList.toggle("error", Boolean(isError));
     }
     function renderConfigEditor(config) {
       configForm.innerHTML = "";
@@ -1667,13 +1686,12 @@ INDEX_HTML = r"""<!doctype html>
       return payload;
     }
     async function saveConfig() {
-      const data = await api("/api/config", {
+      await api("/api/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(collectConfigPayload())
       });
-      configOutput.textContent = JSON.stringify(data, null, 2);
-      await loadConfig();
+      await loadConfig("配置已保存。敏感字段会自动保留或加密，不在页面展示原始值。");
     }
     function browserLocation() {
       return {
@@ -1996,8 +2014,8 @@ INDEX_HTML = r"""<!doctype html>
     document.getElementById("resume-selected-task").addEventListener("click", () => taskAction("resume").catch(error => setStatus(error.message)));
     document.getElementById("stop-selected-task").addEventListener("click", () => taskAction("stop").catch(error => setStatus(error.message)));
     document.getElementById("save-concurrency").addEventListener("click", () => saveConcurrency().catch(error => setStatus(error.message)));
-    document.getElementById("reload-config").addEventListener("click", () => loadConfig().catch(error => configOutput.textContent = error.message));
-    document.getElementById("save-config").addEventListener("click", () => saveConfig().catch(error => configOutput.textContent = error.message));
+    document.getElementById("reload-config").addEventListener("click", () => loadConfig().catch(error => setConfigOutput("配置加载失败：" + error.message, true)));
+    document.getElementById("save-config").addEventListener("click", () => saveConfig().catch(error => setConfigOutput("配置保存失败：" + error.message, true)));
     document.getElementById("browser-refresh").addEventListener("click", () => browse(true).catch(error => browserOutput.textContent = error.message));
     document.getElementById("browser-go").addEventListener("click", () => browse(true).catch(error => browserOutput.textContent = error.message));
     document.getElementById("browser-profile-select").addEventListener("change", event => {

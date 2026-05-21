@@ -651,8 +651,11 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("text/html", headers["Content-Type"])
         self.assertNotIn("body::after", html)
+        self.assertNotIn('<pre id="config-output"', html)
+        self.assertNotIn("configOutput.textContent = JSON.stringify(data.config", html)
         for label in (
             "配置中心",
+            "配置已加载",
             "存储位置",
             "源存储位置",
             "目标存储位置",
@@ -728,6 +731,8 @@ class WebConsoleServerTests(unittest.TestCase):
             self.assertIn(endpoint, html)
         for marker in (
             'id="config-form"',
+            'id="config-output" class="config-status" role="status"',
+            'function setConfigOutput',
             'id="save-config"',
             'className = "config-tabs"',
             'className = "config-tab"',
