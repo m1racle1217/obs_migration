@@ -3641,8 +3641,12 @@ def should_start_web_ui(cfg, web_flag=False):
     return cfg.getboolean("WEB_UI", "enabled", fallback=False)
 
 
-def _new_task_manager():
-    return TaskManager(run_migration)
+def _new_task_manager(cfg=None):
+    state_dir = DEFAULT_CONFIG["PATH"]["state_dir"]
+    if cfg is not None:
+        state_dir = cfg.get("PATH", "state_dir", fallback=state_dir)
+    persistence_path = os.path.join(resolve_runtime_path(state_dir), "web_tasks.json")
+    return TaskManager(run_migration, persistence_path=persistence_path)
 
 
 def _start_web_console(cfg, task_manager):
@@ -3789,7 +3793,7 @@ def main(argv=None):
     if not start_web:
         return run_migration(cfg)
 
-    task_manager = _new_task_manager()
+    task_manager = _new_task_manager(cfg)
     server = _start_web_console(cfg, task_manager)
     try:
         try:

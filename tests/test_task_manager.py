@@ -1,4 +1,5 @@
 import queue
+import json
 import threading
 import time
 import unittest
@@ -134,6 +135,75 @@ class TaskManagerTests(unittest.TestCase):
 
 
 class MultiTaskManagerTests(unittest.TestCase):
+    def test_persists_tasks_and_restores_them_after_restart(self):
+        with TemporaryDirectory() as tmpdir:
+            store_path = Path(tmpdir, "web_tasks.json")
+            manager = MultiTaskManager(lambda _cfg, _controls: None, persistence_path=store_path)
+
+            task_id = manager.create_task(make_test_config("persisted"), name="Persisted Task")
+            manager.update_concurrency(task_id, {"upload_workers": 9})
+
+            self.assertTrue(store_path.exists())
+            raw = json.loads(store_path.read_text(encoding="utf-8"))
+            self.assertEqual(raw["tasks"][0]["task_id"], task_id)
+
+            restored = MultiTaskManager(lambda _cfg, _controls: None, persistence_path=store_path)
+            tasks = restored.list_tasks()
+
+            self.assertEqual(len(tasks), 1)
+            self.assertEqual(tasks[0]["task_id"], task_id)
+            self.assertEqual(tasks[0]["name"], "Persisted Task")
+            self.assertEqual(tasks[0]["state"], "idle")
+            self.assertEqual(tasks[0]["concurrency"]["upload_workers"], 9)
+            cfg = restored.get_task_config(task_id)
+            self.assertEqual(cfg.get("TEST", "name"), "persisted")
+
+    def test_restores_running_task_as_stopped_with_last_snapshot(self):
+        with TemporaryDirectory() as tmpdir:
+            store_path = Path(tmpdir, "web_tasks.json")
+            release = threading.Event()
+            started = threading.Event()
+
+            def runner(_cfg, controls):
+                controls.update_status(
+                    progress={"files_done": 3},
+                    logs={"log_file": "logs/task.log", "report_file": "check_report/task.csv"},
+                )
+                started.set()
+                release.wait(timeout=2)
+
+            manager = MultiTaskManager(runner, persistence_path=store_path)
+            task_id = manager.create_task(make_test_config("running"), name="Running Task")
+            self.assertTrue(manager.start(task_id))
+            self.assertTrue(started.wait(timeout=1))
+
+            restored = MultiTaskManager(lambda _cfg, _controls: None, persistence_path=store_path)
+            snapshot = restored.snapshot(task_id)
+
+            self.assertEqual(snapshot["state"], "stopped")
+            self.assertEqual(snapshot["progress"], {"files_done": 3})
+            self.assertEqual(snapshot["logs"]["log_file"], "logs/task.log")
+            self.assertEqual(snapshot["logs"]["report_file"], "check_report/task.csv")
+            self.assertIsNotNone(snapshot["timestamps"]["started_at"])
+            self.assertIsNotNone(snapshot["timestamps"]["finished_at"])
+
+            release.set()
+            self.assertTrue(manager.join(task_id, timeout=1))
+
+    def test_delete_task_updates_persistence_file(self):
+        with TemporaryDirectory() as tmpdir:
+            store_path = Path(tmpdir, "web_tasks.json")
+            manager = MultiTaskManager(lambda _cfg, _controls: None, persistence_path=store_path)
+            task_a = manager.create_task(make_test_config("a"), name="Task A")
+            task_b = manager.create_task(make_test_config("b"), name="Task B")
+
+            manager.delete_task(task_a)
+
+            restored = MultiTaskManager(lambda _cfg, _controls: None, persistence_path=store_path)
+            self.assertEqual([task["task_id"] for task in restored.list_tasks()], [task_b])
+            with self.assertRaises(KeyError):
+                restored.get_task_config(task_a)
+
     def test_creates_multiple_independent_tasks_and_runs_them_in_parallel(self):
         releases = {}
         started = {}

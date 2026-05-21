@@ -3,6 +3,8 @@
 
 import copy
 import configparser
+import json
+import os
 import threading
 import time
 import traceback
@@ -12,12 +14,13 @@ import uuid
 class TaskControls:
     """Thread-safe pause/stop signals plus dashboard status storage."""
 
-    def __init__(self):
+    def __init__(self, on_change=None):
         self.pause_event = threading.Event()
         self.stop_event = threading.Event()
         self._status = {}
         self._concurrency = {}
         self._lock = threading.Lock()
+        self._on_change = on_change
 
     def pause_requested(self):
         return self.pause_event.is_set()
@@ -34,6 +37,7 @@ class TaskControls:
     def update_status(self, **values):
         with self._lock:
             self._status.update(values)
+        self._notify_change()
 
     def update_concurrency(self, **values):
         clean = {}
@@ -46,6 +50,7 @@ class TaskControls:
                 continue
         with self._lock:
             self._concurrency.update(clean)
+        self._notify_change()
 
     def get_concurrency(self):
         with self._lock:
@@ -56,6 +61,10 @@ class TaskControls:
             data = copy.deepcopy(self._status)
             data["concurrency"] = copy.deepcopy(self._concurrency)
             return data
+
+    def _notify_change(self):
+        if callable(self._on_change):
+            self._on_change()
 
 
 class TaskManager:
@@ -203,15 +212,17 @@ class ManagedMigrationTask:
     STATES = TaskManager.STATES
     ACTIVE_STATES = TaskManager.ACTIVE_STATES
 
-    def __init__(self, task_id, name, cfg, runner):
+    def __init__(self, task_id, name, cfg, runner, on_change=None):
         self.task_id = task_id
         self.name = name or task_id
         self.cfg = _copy_config(cfg)
         self.runner = runner
+        self._on_change = on_change
         self.controls = None
         self._thread = None
         self._state = "idle"
         self._error = None
+        self._restored_status = {}
         self._timestamps = {
             "created_at": time.time(),
             "started_at": None,
@@ -229,6 +240,7 @@ class ManagedMigrationTask:
 
             self.controls = TaskControls()
             self.controls.update_concurrency(**self._concurrency)
+            self.controls._on_change = self._notify_change
             self._state = "starting"
             self._error = None
             self._timestamps["started_at"] = time.time()
@@ -240,7 +252,8 @@ class ManagedMigrationTask:
                 name=f"MigrationTask-{self.task_id}",
             )
             self._thread.start()
-            return True
+        self._notify_change()
+        return True
 
     def _run(self, controls):
         self._mark_started(controls)
@@ -251,11 +264,13 @@ class ManagedMigrationTask:
                 self._state = "failed"
                 self._error = traceback.format_exc()
                 self._timestamps["finished_at"] = time.time()
+            self._notify_change()
             return
 
         with self._lock:
             self._state = "stopped" if controls.stop_requested() else "completed"
             self._timestamps["finished_at"] = time.time()
+        self._notify_change()
 
     def pause(self):
         with self._lock:
@@ -263,7 +278,8 @@ class ManagedMigrationTask:
                 return False
             self.controls.pause_event.set()
             self._state = "paused"
-            return True
+        self._notify_change()
+        return True
 
     def resume(self):
         with self._lock:
@@ -272,20 +288,24 @@ class ManagedMigrationTask:
             self.controls.pause_event.clear()
             if self._thread is not None and self._thread.is_alive():
                 self._state = "running"
-            return True
+        self._notify_change()
+        return True
 
     def stop(self):
         with self._lock:
             if self.controls is None:
                 self._state = "stopped"
                 self._timestamps["finished_at"] = self._timestamps["finished_at"] or time.time()
-                return False
-            self.controls.stop_event.set()
-            if self._thread is not None and self._thread.is_alive():
-                self._state = "stopping"
-            elif self._state not in {"failed", "completed"}:
-                self._state = "stopped"
-            return True
+                result = False
+            else:
+                self.controls.stop_event.set()
+                if self._thread is not None and self._thread.is_alive():
+                    self._state = "stopping"
+                elif self._state not in {"failed", "completed"}:
+                    self._state = "stopped"
+                result = True
+        self._notify_change()
+        return result
 
     def join(self, timeout=None):
         thread = self._thread
@@ -305,6 +325,7 @@ class ManagedMigrationTask:
             controls = self.controls
         if controls is not None:
             controls.update_concurrency(**clean)
+        self._notify_change()
         return self.snapshot()
 
     def config_copy(self):
@@ -335,7 +356,7 @@ class ManagedMigrationTask:
             timestamps = dict(self._timestamps)
             concurrency = dict(self._concurrency)
 
-        controls_snapshot = controls.snapshot() if controls is not None else {}
+        controls_snapshot = controls.snapshot() if controls is not None else copy.deepcopy(self._restored_status)
         if controls_snapshot.get("concurrency"):
             concurrency.update(controls_snapshot.get("concurrency", {}))
         progress = controls_snapshot.get("progress", {})
@@ -365,28 +386,87 @@ class ManagedMigrationTask:
         with self._lock:
             if controls.pause_requested() or self._state in {"pausing", "paused"}:
                 self._state = "paused"
-                return
-            self._state = "running"
+                changed = True
+            else:
+                self._state = "running"
+                changed = True
+        if changed:
+            self._notify_change()
+
+    def to_record(self):
+        snapshot = self.snapshot()
+        return {
+            "task_id": self.task_id,
+            "name": self.name,
+            "config": _config_to_dict(self.cfg),
+            "state": snapshot["state"],
+            "error": snapshot["error"],
+            "timestamps": snapshot["timestamps"],
+            "status": {
+                "progress": snapshot.get("progress", {}),
+                "pipeline": snapshot.get("pipeline", {}),
+                "workers": snapshot.get("workers", {}),
+                "queues": snapshot.get("queues", {}),
+                "logs": snapshot.get("logs", {}),
+            },
+            "concurrency": snapshot.get("concurrency", {}),
+        }
+
+    @classmethod
+    def from_record(cls, record, runner, on_change=None):
+        task = cls(
+            str(record.get("task_id") or uuid.uuid4().hex[:12]),
+            str(record.get("name") or record.get("task_id") or "迁移任务"),
+            _config_from_dict(record.get("config") or {}),
+            runner,
+            on_change=on_change,
+        )
+        state = str(record.get("state") or "idle")
+        timestamps = dict(record.get("timestamps") or {})
+        if state in cls.ACTIVE_STATES:
+            state = "stopped"
+            timestamps["finished_at"] = timestamps.get("finished_at") or time.time()
+        task._state = state if state in cls.STATES else "stopped"
+        task._error = record.get("error")
+        task._timestamps = {
+            "created_at": timestamps.get("created_at") or time.time(),
+            "started_at": timestamps.get("started_at"),
+            "finished_at": timestamps.get("finished_at"),
+        }
+        task._restored_status = copy.deepcopy(record.get("status") or {})
+        concurrency = _normalize_concurrency(record.get("concurrency") or {})
+        if concurrency:
+            task._concurrency.update(concurrency)
+            _apply_concurrency_to_config(task.cfg, concurrency)
+        return task
+
+    def _notify_change(self):
+        if callable(self._on_change):
+            self._on_change()
 
 
 class MultiTaskManager:
     """Manages multiple independently runnable migration tasks."""
 
-    def __init__(self, runner):
+    def __init__(self, runner, persistence_path=None):
         self.runner = runner
+        self.persistence_path = os.fspath(persistence_path) if persistence_path else None
         self._tasks = {}
         self._selected_task_id = None
         self._lock = threading.Lock()
+        self._persist_lock = threading.Lock()
+        self._load_persisted_tasks()
 
     def create_task(self, cfg, name=None, task_id=None):
         task_id = task_id or uuid.uuid4().hex[:12]
-        task = ManagedMigrationTask(task_id, name or f"任务 {len(self._tasks) + 1}", cfg, self.runner)
+        task = ManagedMigrationTask(task_id, name or f"任务 {len(self._tasks) + 1}", cfg, self.runner, on_change=self._persist)
         with self._lock:
             while task_id in self._tasks:
                 task_id = uuid.uuid4().hex[:12]
                 task.task_id = task_id
             self._tasks[task_id] = task
             self._selected_task_id = task_id
+        self._persist()
         return task_id
 
     def list_tasks(self):
@@ -411,21 +491,30 @@ class MultiTaskManager:
         task = self._task_or_default(task_id)
         if task is None:
             return False
-        return task.start()
+        result = task.start()
+        self._persist()
+        return result
 
     def pause(self, task_id=None):
         task = self._task_or_default(task_id)
-        return False if task is None else task.pause()
+        result = False if task is None else task.pause()
+        self._persist()
+        return result
 
     def resume(self, task_id=None):
         task = self._task_or_default(task_id)
-        return False if task is None else task.resume()
+        result = False if task is None else task.resume()
+        self._persist()
+        return result
 
     def stop(self, task_id=None):
         if task_id is None:
             task = self._task_or_default(None)
-            return False if task is None else task.stop()
-        return self._task(task_id).stop()
+            result = False if task is None else task.stop()
+        else:
+            result = self._task(task_id).stop()
+        self._persist()
+        return result
 
     def stop_all(self):
         with self._lock:
@@ -433,6 +522,7 @@ class MultiTaskManager:
         result = False
         for task in tasks:
             result = task.stop() or result
+        self._persist()
         return result
 
     def delete_task(self, task_id):
@@ -443,6 +533,7 @@ class MultiTaskManager:
             if self._selected_task_id == task_id:
                 self._selected_task_id = next(iter(self._tasks), None)
         task.stop()
+        self._persist()
         return task_id
 
     def join(self, task_id, timeout=None):
@@ -454,13 +545,16 @@ class MultiTaskManager:
         return all(task.join(timeout=timeout) for task in tasks)
 
     def update_concurrency(self, task_id, values):
-        return self._task(task_id).update_concurrency(values)
+        snapshot = self._task(task_id).update_concurrency(values)
+        self._persist()
+        return snapshot
 
     def select_task(self, task_id):
         with self._lock:
             if task_id not in self._tasks:
                 raise KeyError(task_id)
             self._selected_task_id = task_id
+        self._persist()
 
     def _task_or_default(self, task_id):
         with self._lock:
@@ -476,6 +570,43 @@ class MultiTaskManager:
             raise KeyError(task_id)
         return task
 
+    def _persist(self):
+        if not self.persistence_path:
+            return
+        with self._persist_lock:
+            with self._lock:
+                tasks = list(self._tasks.values())
+                selected_task_id = self._selected_task_id
+            data = {
+                "version": 1,
+                "selected_task_id": selected_task_id,
+                "tasks": [task.to_record() for task in tasks],
+            }
+            directory = os.path.dirname(os.path.abspath(self.persistence_path))
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            temp_path = f"{self.persistence_path}.tmp"
+            with open(temp_path, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, ensure_ascii=False, indent=2)
+            os.replace(temp_path, self.persistence_path)
+
+    def _load_persisted_tasks(self):
+        if not self.persistence_path or not os.path.exists(self.persistence_path):
+            return
+        try:
+            with open(self.persistence_path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            return
+        tasks = {}
+        for record in data.get("tasks", []):
+            task = ManagedMigrationTask.from_record(record, self.runner, on_change=self._persist)
+            tasks[task.task_id] = task
+        with self._lock:
+            self._tasks = tasks
+            selected = data.get("selected_task_id")
+            self._selected_task_id = selected if selected in self._tasks else next(iter(self._tasks), None)
+
 
 def _looks_like_config(value):
     return hasattr(value, "sections") and hasattr(value, "get")
@@ -488,6 +619,23 @@ def _copy_config(cfg):
         for key, value in cfg[section].items():
             copied.set(section, key, value)
     return copied
+
+
+def _config_to_dict(cfg):
+    return {
+        section: {key: value for key, value in cfg[section].items()}
+        for section in cfg.sections()
+    }
+
+
+def _config_from_dict(values):
+    cfg = configparser.ConfigParser()
+    for section, items in dict(values or {}).items():
+        if not cfg.has_section(str(section)):
+            cfg.add_section(str(section))
+        for key, value in dict(items or {}).items():
+            cfg.set(str(section), str(key), "" if value is None else str(value))
+    return cfg
 
 
 def _normalize_concurrency(values):

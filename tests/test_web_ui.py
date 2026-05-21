@@ -1006,6 +1006,18 @@ class CliStartupTests(unittest.TestCase):
         cfg.set("WEB_UI", "enabled", "true")
         self.assertTrue(obs_migrate.should_start_web_ui(cfg))
 
+    def test_new_task_manager_uses_web_task_persistence_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.ini"
+            config_path.write_text("", encoding="utf-8")
+            cfg = make_config(require_login=False)
+            cfg.set("PATH", "state_dir", "./custom-state")
+
+            with mock.patch.object(obs_migrate, "CONFIG_FILE", str(config_path)):
+                manager = obs_migrate._new_task_manager(cfg)
+
+        self.assertEqual(Path(manager.persistence_path), Path(temp_dir) / "custom-state" / "web_tasks.json")
+
     def test_start_web_console_starts_port_zero_without_auto_open(self):
         cfg = make_config(require_login=False)
         cfg.set("WEB_UI", "port", "0")
@@ -1233,7 +1245,9 @@ class CliStartupTests(unittest.TestCase):
                                         with redirect_stdout(io.StringIO()):
                                             obs_migrate.main([])
 
-        task_manager_cls.assert_called_once_with(run_migration)
+        task_manager_cls.assert_called_once()
+        self.assertIs(task_manager_cls.call_args.args[0], run_migration)
+        self.assertTrue(str(task_manager_cls.call_args.kwargs["persistence_path"]).endswith(os.path.join("state", "web_tasks.json")))
         web_server_cls.assert_called_once()
         self.assertIs(web_server_cls.call_args.args[1], task_manager)
         task_manager.start.assert_not_called()
