@@ -536,8 +536,50 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(data["task"]["state"], {"starting", "running"})
 
+        status, data, _headers = client.request("DELETE", f"/api/tasks/{task_ids[0]}")
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["task_id"], task_ids[0])
+
+        status, data, _headers = client.request("GET", "/api/tasks")
+        self.assertEqual(status, 200)
+        self.assertEqual([task["task_id"] for task in data["tasks"]], [task_ids[1]])
+
         releases["a"].set()
         releases["b"].set()
+
+    def test_task_concurrency_cannot_exceed_global_limits(self):
+        cfg = make_config()
+        cfg.set("UPLOAD", "workers", "4")
+        cfg.set("UPLOAD", "checkers", "2")
+        cfg.set("SCAN", "scan_workers", "1")
+        manager = MultiTaskManager(lambda _cfg, _controls: None)
+        _server, client, _saved, _cfg = self.make_server(cfg=cfg, task_manager=manager)
+        client.request("POST", "/api/login", {"username": "admin", "password": "secret"})
+
+        status, data, _headers = client.request(
+            "POST",
+            "/api/tasks",
+            {"name": "Too Big", "concurrency": {"upload_workers": 5}},
+        )
+
+        self.assertEqual(status, 400)
+        self.assertFalse(data["ok"])
+        self.assertIn("总控上限 4", data["error"])
+
+        status, data, _headers = client.request("POST", "/api/tasks", {"name": "Within Limit"})
+        self.assertEqual(status, 200)
+        task_id = data["task_id"]
+
+        status, data, _headers = client.request(
+            "PATCH",
+            f"/api/tasks/{task_id}/concurrency",
+            {"check_workers": 3},
+        )
+
+        self.assertEqual(status, 400)
+        self.assertFalse(data["ok"])
+        self.assertIn("总控上限 2", data["error"])
 
     def test_remote_browser_lists_buckets_and_prefix(self):
         class FakeClient:
@@ -668,6 +710,8 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertNotIn("task-grid-has-detail", html)
         for label in (
             "配置中心",
+            "这里是所有任务的总控策略",
+            "单个任务的并发设置不能超过这里的总控数量",
             "配置已加载",
             "存储类型",
             "本地路径",
@@ -749,14 +793,29 @@ class WebConsoleServerTests(unittest.TestCase):
             'id="logout-button"',
             'id="task-list"',
             'class="task-grid task-grid-full"',
+            'id="batch-start-tasks"',
+            'id="batch-pause-tasks"',
+            'id="batch-resume-tasks"',
+            'id="batch-stop-tasks"',
+            'id="batch-delete-tasks"',
+            'selectedTaskIds',
+            'class="task-check"',
+            'data-task-action="start"',
+            'data-task-action="pause"',
+            'data-task-action="resume"',
+            'data-task-action="stop"',
+            'function checkedTaskIds',
+            'function batchTaskAction',
+            'function deleteTask',
             'function updateDashboardLayout',
             'id="task-state-tabs"',
             'id="task-detail-panel"',
             'class="task-detail-panel task-detail-inline hidden"',
+            'taskDetailExpanded',
             'function showTaskDetailPanel',
             'function hideTaskDetailPanel',
             'function attachTaskDetailPanel',
-            'if (selectedTaskId && allTasks.some',
+            'if (selectedTaskId && taskDetailExpanded && allTasks.some',
             'class="task-editor hidden"',
             'id="new-task-source-profile"',
             'id="new-task-target-profile"',
@@ -764,6 +823,9 @@ class WebConsoleServerTests(unittest.TestCase):
             'id="position-preset-list"',
             'function renderPositionPresetManager',
             'function createPositionPreset',
+            'help.className = "field-help"',
+            'function extractGlobalConcurrencyLimits',
+            'function concurrencyValue',
             'function renderTaskProfileSelects',
             'select.innerHTML = `<option value="">',
             'function taskConfigFromProfiles',
@@ -795,6 +857,7 @@ class WebConsoleServerTests(unittest.TestCase):
             'function taskFilterLabel',
             'class="explorer-tree"',
             'data-page="dashboard"',
+            'data-page="positions"',
             'data-page="config"',
             'data-page="browser"',
             'data-page="logs"',

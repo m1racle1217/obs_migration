@@ -435,6 +435,16 @@ class MultiTaskManager:
             result = task.stop() or result
         return result
 
+    def delete_task(self, task_id):
+        with self._lock:
+            if task_id not in self._tasks:
+                raise KeyError(task_id)
+            task = self._tasks.pop(task_id)
+            if self._selected_task_id == task_id:
+                self._selected_task_id = next(iter(self._tasks), None)
+        task.stop()
+        return task_id
+
     def join(self, task_id, timeout=None):
         return self._task(task_id).join(timeout=timeout)
 

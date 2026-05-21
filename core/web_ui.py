@@ -645,6 +645,11 @@ INDEX_HTML = r"""<!doctype html>
     .task-card { padding: 15px; cursor: pointer; }
     .task-card.selected { border-color: var(--primary-strong); box-shadow: 0 0 0 2px rgba(96,165,250,.18); }
     .task-card h3 { margin: 0 0 8px; }
+    .task-card-head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start; }
+    .task-check { width: 18px; min-height: 18px; margin-top: 3px; accent-color: var(--primary); }
+    .task-card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+    .task-card-actions button { min-height: 34px; border-radius: 10px; padding: 0 12px; font-size: 12px; }
+    .bulk-toolbar { padding-bottom: 12px; border-bottom: 1px solid rgba(96,165,250,.16); margin-bottom: 12px; }
     .task-detail-inline {
       margin: -2px 0 8px 18px;
       padding: 13px;
@@ -698,6 +703,7 @@ INDEX_HTML = r"""<!doctype html>
     .config-panel[hidden] { display: none; }
     fieldset { border: 1px solid var(--line); border-radius: 16px; padding: 14px; }
     legend { color: var(--primary-strong); font-weight: 800; }
+    .field-help { color: var(--muted); font-size: 12px; line-height: 1.55; font-weight: 500; }
     .config-panel legend { grid-column: 1 / -1; }
     pre, .code {
       overflow: auto;
@@ -979,6 +985,7 @@ INDEX_HTML = r"""<!doctype html>
       <div class="brand"><div class="mark">OBS</div><div><strong>OBS Migration</strong><small>Blue Operations Node</small></div></div>
       <nav class="nav" aria-label="主导航">
         <a href="#dashboard">任务列表</a>
+        <a href="#positions">位置预设</a>
         <a href="#config">配置中心</a>
         <a href="#browser">目录浏览</a>
         <a href="#logs">日志 / 报告</a>
@@ -1000,12 +1007,13 @@ INDEX_HTML = r"""<!doctype html>
 
       <section id="dashboard" class="task-grid task-grid-full" data-page="dashboard">
         <aside class="panel">
-          <div class="toolbar">
+          <div class="toolbar bulk-toolbar">
             <button id="new-task-button" class="primary" type="button">新增任务</button>
-            <button id="start-selected-task" class="primary" type="button">启动任务</button>
-            <button id="pause-selected-task" type="button">暂停</button>
-            <button id="resume-selected-task" type="button">继续</button>
-            <button id="stop-selected-task" class="danger" type="button">停止</button>
+            <button id="batch-start-tasks" class="primary" type="button">批量启动</button>
+            <button id="batch-pause-tasks" type="button">批量暂停</button>
+            <button id="batch-resume-tasks" type="button">批量继续</button>
+            <button id="batch-stop-tasks" class="danger" type="button">批量停止</button>
+            <button id="batch-delete-tasks" class="danger" type="button">批量删除</button>
           </div>
           <div id="task-editor" class="task-editor hidden" data-page="dashboard">
             <h2>新增任务配置</h2>
@@ -1045,13 +1053,9 @@ INDEX_HTML = r"""<!doctype html>
         </section>
       </section>
 
-      <section id="config" class="panel" data-page="config">
-        <h2>配置中心</h2>
+      <section id="positions" class="panel" data-page="positions">
+        <h2>位置预设</h2>
         <p class="muted">位置预设用于给常用本地目录、OBS/S3 Bucket/Prefix 起名字；新增任务和目录浏览都按预设名称选择。</p>
-        <div class="toolbar">
-          <button id="reload-config" type="button">重新加载配置</button>
-          <button id="save-config" class="primary" type="button">保存配置</button>
-        </div>
         <section class="preset-manager" aria-label="位置预设管理">
           <div>
             <h2>位置预设</h2>
@@ -1071,6 +1075,15 @@ INDEX_HTML = r"""<!doctype html>
           <div class="toolbar"><button id="position-preset-save" class="primary" type="button">保存位置预设</button></div>
           <div id="position-preset-list" class="preset-list" aria-label="已保存的位置预设"></div>
         </section>
+      </section>
+
+      <section id="config" class="panel" data-page="config">
+        <h2>配置中心</h2>
+        <p class="muted">这里是所有任务的总控策略：传输、扫描、校验、路径报告和 Web 控制台。单个任务的并发设置不能超过这里的总控数量。</p>
+        <div class="toolbar">
+          <button id="reload-config" type="button">重新加载配置</button>
+          <button id="save-config" class="primary" type="button">保存配置</button>
+        </div>
         <form id="config-form" class="config-grid" aria-label="高级配置编辑器"></form>
         <div id="config-output" class="config-status" role="status" aria-live="polite">等待加载配置...</div>
       </section>
@@ -1109,7 +1122,7 @@ INDEX_HTML = r"""<!doctype html>
             <button id="browser-go" type="button">转到</button>
           </div>
           <div id="browser-mode-note" class="explorer-mode-note">先在上方选择一个位置预设；可作为源端迁移入口，也可作为目标落点。</div>
-          <div id="browser-profile-empty" class="explorer-mode-note hidden">暂无位置预设。请先到“配置中心”保存一个位置预设。</div>
+          <div id="browser-profile-empty" class="explorer-mode-note hidden">暂无位置预设。请先到“位置预设”保存一个位置预设。</div>
           <div class="explorer-layout">
             <aside class="explorer-tree" aria-label="位置预设">
               <h3>位置预设</h3>
@@ -1163,9 +1176,10 @@ INDEX_HTML = r"""<!doctype html>
     const AUTH_KEY = "obsWebConsole.authenticated";
     const statusText = document.getElementById("status-text");
     const authMessage = document.getElementById("auth-message");
-    const NAV_PAGES = new Set(["dashboard", "config", "browser", "logs"]);
+    const NAV_PAGES = new Set(["dashboard", "positions", "config", "browser", "logs"]);
     const PAGE_TITLES = {
       dashboard: "任务列表",
+      positions: "位置预设",
       config: "配置中心",
       browser: "目录浏览",
       logs: "日志 / 报告"
@@ -1196,6 +1210,21 @@ INDEX_HTML = r"""<!doctype html>
       bucket: "Bucket",
       prefix: "Prefix"
     };
+    const CONFIG_FIELD_HELP = {
+      "UPLOAD.workers": "全局上传线程上限；单个任务的上传线程不能超过这个数量。",
+      "UPLOAD.checkers": "全局校验线程上限；单个任务的检查线程不能超过这个数量。",
+      "UPLOAD.multipart_concurrency": "单个大文件分片上传的全局并发上限；只影响后续新对象。",
+      "UPLOAD.max_connections": "对象存储客户端最大连接数上限；并行任务总压测不足时先调这里。",
+      "SCAN.scan_workers": "全局扫描线程上限；任务级扫描并发不能超过它。",
+      "CHECK.enabled": "是否启用迁移前/迁移后的校验逻辑。",
+      "PATH.migration_list_file": "迁移列表文件路径；目录浏览加入迁移列表会写入这里。",
+      "WEB_UI.enabled": "是否通过配置默认启动 Web 控制台；CLI 默认行为仍不变。",
+      "WEB_UI.host": "Web 监听地址；非本机地址时必须开启登录。",
+      "WEB_UI.port": "Web 控制台端口。",
+      "WEB_UI.require_login": "是否要求登录；建议保持开启。",
+      "WEB_UI.username": "Web 登录用户名。",
+      "WEB_UI.password": "Web 登录密码；保存后会加密或保留掩码。"
+    };
     const taskList = document.getElementById("task-list");
     const dashboardMetrics = document.getElementById("dashboard-metrics");
     const workerList = document.getElementById("worker-list");
@@ -1216,6 +1245,9 @@ INDEX_HTML = r"""<!doctype html>
     let selectedTaskId = null;
     let selectedLogTaskId = null;
     let allTasks = [];
+    let selectedTaskIds = new Set();
+    let taskDetailExpanded = false;
+    let globalConcurrencyLimits = {};
     let taskFilter = "all";
     let logTab = "log";
     let selectedBrowserItem = null;
@@ -1343,13 +1375,14 @@ INDEX_HTML = r"""<!doctype html>
     async function loadTasks() {
       const data = await api("/api/tasks");
       allTasks = data.tasks || [];
+      selectedTaskIds = new Set(Array.from(selectedTaskIds).filter(taskId => allTasks.some(task => task.task_id === taskId)));
       renderTaskFilters(allTasks);
       renderTasks(allTasks);
       syncLogTaskSelect(allTasks);
-      if (selectedTaskId && allTasks.some(task => task.task_id === selectedTaskId)) {
+      if (selectedTaskId && taskDetailExpanded && allTasks.some(task => task.task_id === selectedTaskId)) {
         await loadTask(selectedTaskId);
       } else {
-        selectedTaskId = null;
+        if (selectedTaskId && !allTasks.some(task => task.task_id === selectedTaskId)) selectedTaskId = null;
         hideTaskDetailPanel();
       }
     }
@@ -1399,18 +1432,53 @@ INDEX_HTML = r"""<!doctype html>
       }
       visibleTasks.forEach(task => {
         const percent = pct(task.dashboard && task.dashboard.percent);
+        const taskId = task.task_id || "";
         const card = document.createElement("article");
         card.className = "task-card" + (task.task_id === selectedTaskId ? " selected" : "");
-        card.dataset.taskId = task.task_id || "";
-        card.innerHTML = `<h3>${task.name || task.task_id}</h3><p class="muted">${task.source || "未设置源"} → ${task.target || "未设置目标"}</p><div class="progress-line"><span style="width:${percent}%"></span></div><p>${task.state} · ${percent.toFixed(1)}% · 错误 ${(task.dashboard && task.dashboard.upload_errors) || 0}</p>`;
+        card.dataset.taskId = taskId;
+        card.innerHTML = `
+          <div class="task-card-head">
+            <input class="task-check" type="checkbox" data-task-id="${escapeHtml(taskId)}" aria-label="选择任务 ${escapeHtml(task.name || taskId)}" ${selectedTaskIds.has(taskId) ? "checked" : ""}>
+            <div>
+              <h3>${escapeHtml(task.name || taskId)}</h3>
+              <p class="muted">${escapeHtml(task.source || "未设置源")} → ${escapeHtml(task.target || "未设置目标")}</p>
+            </div>
+          </div>
+          <div class="progress-line"><span style="width:${percent}%"></span></div>
+          <p>${escapeHtml(task.state || "unknown")} · ${percent.toFixed(1)}% · 错误 ${(task.dashboard && task.dashboard.upload_errors) || 0}</p>
+          <div class="task-card-actions" aria-label="任务控制">
+            <button class="primary" type="button" data-task-action="start" data-task-id="${escapeHtml(taskId)}">启动</button>
+            <button type="button" data-task-action="pause" data-task-id="${escapeHtml(taskId)}">暂停</button>
+            <button type="button" data-task-action="resume" data-task-id="${escapeHtml(taskId)}">继续</button>
+            <button class="danger" type="button" data-task-action="stop" data-task-id="${escapeHtml(taskId)}">停止</button>
+          </div>`;
+        const checkbox = card.querySelector(".task-check");
+        checkbox.addEventListener("click", event => {
+          event.stopPropagation();
+          if (checkbox.checked) selectedTaskIds.add(taskId);
+          else selectedTaskIds.delete(taskId);
+        });
+        card.querySelectorAll("[data-task-action]").forEach(button => {
+          button.addEventListener("click", event => {
+            event.stopPropagation();
+            taskAction(button.dataset.taskAction, button.dataset.taskId).catch(error => setStatus(error.message));
+          });
+        });
         card.addEventListener("click", () => {
+          const sameTask = selectedTaskId === task.task_id;
           selectedTaskId = task.task_id;
+          taskDetailExpanded = !sameTask || !taskDetailExpanded;
           renderTasks(allTasks);
-          setStatus("正在打开任务：" + (task.name || task.task_id));
-          loadTask(task.task_id).catch(error => setStatus(error.message));
+          if (taskDetailExpanded) {
+            setStatus("正在打开任务：" + (task.name || task.task_id));
+            loadTask(task.task_id).catch(error => setStatus(error.message));
+          } else {
+            hideTaskDetailPanel();
+            setStatus("任务详情已折叠：" + (task.name || task.task_id));
+          }
         });
         taskList.appendChild(card);
-        if (task.task_id === selectedTaskId) attachTaskDetailPanel(card);
+        if (task.task_id === selectedTaskId && taskDetailExpanded) attachTaskDetailPanel(card);
       });
     }
     async function loadTask(taskId) {
@@ -1454,12 +1522,14 @@ INDEX_HTML = r"""<!doctype html>
       setStatus("任务状态已更新");
     }
     function showTaskDetailPanel() {
+      taskDetailExpanded = true;
       document.getElementById("task-detail-panel").classList.remove("hidden");
       const card = Array.from(taskList.querySelectorAll(".task-card")).find(item => item.dataset.taskId === selectedTaskId);
       attachTaskDetailPanel(card);
       updateDashboardLayout();
     }
     function hideTaskDetailPanel() {
+      taskDetailExpanded = false;
       document.getElementById("task-detail-panel").classList.add("hidden");
       dashboardMetrics.innerHTML = "";
       workerList.innerHTML = "";
@@ -1543,14 +1613,65 @@ INDEX_HTML = r"""<!doctype html>
       setStatus(message);
       hideTaskDetailPanel();
     }
-    async function taskAction(action) {
-      if (!selectedTaskId) {
+    function checkedTaskIds() {
+      const checked = Array.from(document.querySelectorAll(".task-check:checked")).map(input => input.dataset.taskId).filter(Boolean);
+      checked.forEach(taskId => selectedTaskIds.add(taskId));
+      return Array.from(new Set([...selectedTaskIds].filter(taskId => allTasks.some(task => task.task_id === taskId))));
+    }
+    async function taskAction(action, taskId = selectedTaskId) {
+      if (!taskId) {
         showNoTaskSelected();
         return;
       }
-      const data = await api(`/api/tasks/${selectedTaskId}/${action}`, { method: "POST" });
+      selectedTaskId = taskId;
+      taskDetailExpanded = true;
+      const data = await api(`/api/tasks/${taskId}/${action}`, { method: "POST" });
       renderTask(data.task || data.status);
       await loadTasks();
+    }
+    async function batchTaskAction(action) {
+      const taskIds = checkedTaskIds();
+      if (!taskIds.length) {
+        setStatus("请先勾选要批量操作的任务。");
+        return;
+      }
+      for (const taskId of taskIds) {
+        await api(`/api/tasks/${taskId}/${action}`, { method: "POST" });
+      }
+      setStatus(`已对 ${taskIds.length} 个任务执行批量${taskActionLabel(action)}。`);
+      await loadTasks();
+    }
+    function taskActionLabel(action) {
+      return { start: "启动", pause: "暂停", resume: "继续", stop: "停止" }[action] || action;
+    }
+    async function deleteTask(taskId) {
+      if (!taskId) return;
+      await api(`/api/tasks/${taskId}`, { method: "DELETE" });
+      selectedTaskIds.delete(taskId);
+      if (selectedTaskId === taskId) {
+        selectedTaskId = null;
+        hideTaskDetailPanel();
+      }
+    }
+    async function batchDeleteTasks() {
+      const taskIds = checkedTaskIds();
+      if (!taskIds.length) {
+        setStatus("请先勾选要删除的任务。");
+        return;
+      }
+      if (!window.confirm(`确认删除 ${taskIds.length} 个任务？运行中的任务会先请求停止。`)) return;
+      for (const taskId of taskIds) {
+        await deleteTask(taskId);
+      }
+      setStatus(`已删除 ${taskIds.length} 个任务。`);
+      await loadTasks();
+    }
+    function concurrencyValue(id, key) {
+      const field = document.getElementById(id);
+      const value = Number(field.value || 1);
+      const limit = Number(globalConcurrencyLimits[key] || value || 1);
+      if (value > limit) throw new Error(`${field.closest("label")?.firstChild?.textContent || key}不能超过配置中心总控上限 ${limit}`);
+      return Math.max(1, value);
     }
     async function saveConcurrency() {
       if (!selectedTaskId) return;
@@ -1558,10 +1679,10 @@ INDEX_HTML = r"""<!doctype html>
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          upload_workers: document.getElementById("concurrency-upload").value,
-          check_workers: document.getElementById("concurrency-check").value,
-          scan_workers: document.getElementById("concurrency-scan").value,
-          multipart_concurrency: document.getElementById("concurrency-multipart").value
+          upload_workers: concurrencyValue("concurrency-upload", "upload_workers"),
+          check_workers: concurrencyValue("concurrency-check", "check_workers"),
+          scan_workers: concurrencyValue("concurrency-scan", "scan_workers"),
+          multipart_concurrency: concurrencyValue("concurrency-multipart", "multipart_concurrency")
         })
       });
       renderTask(data.task);
@@ -1577,10 +1698,11 @@ INDEX_HTML = r"""<!doctype html>
         body: JSON.stringify({
           name: document.getElementById("new-task-name").value || "迁移任务",
           config: taskConfigFromProfiles(sourceProfile, targetProfile, source, target),
-          concurrency: { upload_workers: document.getElementById("new-task-upload-workers").value }
+          concurrency: { upload_workers: concurrencyValue("new-task-upload-workers", "upload_workers") }
         })
       });
       selectedTaskId = data.task_id;
+      taskDetailExpanded = true;
       document.getElementById("task-editor").classList.add("hidden");
       await loadTasks();
     }
@@ -1624,9 +1746,24 @@ INDEX_HTML = r"""<!doctype html>
     }
     async function loadConfig(message = "配置已加载。修改后点击“保存配置”即可生效。") {
       const data = await api("/api/config");
+      globalConcurrencyLimits = extractGlobalConcurrencyLimits(data.config || {});
       renderConfigEditor(data.config);
       renderPositionPresetManager();
       setConfigOutput(message);
+    }
+    function extractGlobalConcurrencyLimits(config) {
+      const value = (section, key, fallback) => {
+        const meta = config[section] && config[section][key];
+        const number = Number(meta && meta.value);
+        return Number.isFinite(number) && number > 0 ? number : fallback;
+      };
+      return {
+        upload_workers: value("UPLOAD", "workers", 1),
+        check_workers: value("UPLOAD", "checkers", 1),
+        scan_workers: value("SCAN", "scan_workers", 1),
+        multipart_concurrency: value("UPLOAD", "multipart_concurrency", 1),
+        max_connections: value("UPLOAD", "max_connections", 1)
+      };
     }
     function setConfigOutput(message, isError = false) {
       configOutput.textContent = message;
@@ -1726,7 +1863,18 @@ INDEX_HTML = r"""<!doctype html>
       field.dataset.key = key;
       field.value = meta && meta.value !== undefined ? meta.value : "";
       label.appendChild(field);
+      const help = document.createElement("span");
+      help.className = "field-help";
+      help.textContent = configFieldHelp(section, key, meta);
+      label.appendChild(help);
       return label;
+    }
+    function configFieldHelp(section, key, meta) {
+      const exact = CONFIG_FIELD_HELP[`${section}.${key}`];
+      if (exact) return exact;
+      const description = meta && meta.description ? String(meta.description) : "";
+      if (description) return description;
+      return "高级配置项；修改后点击保存配置生效。";
     }
     function updateStorageFieldVisibility(section) {
       if (!["SOURCE", "TARGET"].includes(section)) return;
@@ -2195,10 +2343,11 @@ INDEX_HTML = r"""<!doctype html>
     document.getElementById("new-task-source-profile").addEventListener("change", event => applyTaskProfile("source", event.target.value));
     document.getElementById("new-task-target-profile").addEventListener("change", event => applyTaskProfile("target", event.target.value));
     document.getElementById("create-task").addEventListener("click", () => createTask().catch(error => setStatus(error.message)));
-    document.getElementById("start-selected-task").addEventListener("click", () => taskAction("start").catch(error => setStatus(error.message)));
-    document.getElementById("pause-selected-task").addEventListener("click", () => taskAction("pause").catch(error => setStatus(error.message)));
-    document.getElementById("resume-selected-task").addEventListener("click", () => taskAction("resume").catch(error => setStatus(error.message)));
-    document.getElementById("stop-selected-task").addEventListener("click", () => taskAction("stop").catch(error => setStatus(error.message)));
+    document.getElementById("batch-start-tasks").addEventListener("click", () => batchTaskAction("start").catch(error => setStatus(error.message)));
+    document.getElementById("batch-pause-tasks").addEventListener("click", () => batchTaskAction("pause").catch(error => setStatus(error.message)));
+    document.getElementById("batch-resume-tasks").addEventListener("click", () => batchTaskAction("resume").catch(error => setStatus(error.message)));
+    document.getElementById("batch-stop-tasks").addEventListener("click", () => batchTaskAction("stop").catch(error => setStatus(error.message)));
+    document.getElementById("batch-delete-tasks").addEventListener("click", () => batchDeleteTasks().catch(error => setStatus(error.message)));
     document.getElementById("save-concurrency").addEventListener("click", () => saveConcurrency().catch(error => setStatus(error.message)));
     document.getElementById("reload-config").addEventListener("click", () => loadConfig().catch(error => setConfigOutput("配置加载失败：" + error.message, true)));
     document.getElementById("save-config").addEventListener("click", () => saveConfig().catch(error => setConfigOutput("配置保存失败：" + error.message, true)));
@@ -2334,6 +2483,9 @@ class WebConsoleServer:
             def do_PATCH(self):
                 server._handle(self)
 
+            def do_DELETE(self):
+                server._handle(self)
+
             def log_message(self, _format, *args):
                 return
 
@@ -2346,7 +2498,7 @@ class WebConsoleServer:
             if request.command == "GET" and path in {"/", "/index.html"}:
                 self._send_html(request, INDEX_HTML)
                 return
-            if path.startswith("/api/") and request.command in {"POST", "PATCH"} and not self._is_same_origin_request(request):
+            if path.startswith("/api/") and request.command in {"POST", "PATCH", "DELETE"} and not self._is_same_origin_request(request):
                 self._send_json(request, {"ok": False, "error": "forbidden"}, HTTPStatus.FORBIDDEN)
                 return
             if request.command == "POST" and path == "/api/login":
@@ -2364,6 +2516,8 @@ class WebConsoleServer:
                 self._handle_list_tasks(request)
             elif request.command == "POST" and path == "/api/tasks":
                 self._handle_create_task(request)
+            elif task_route and request.command == "DELETE" and not task_route[1]:
+                self._handle_delete_task(request, task_route[0])
             elif task_route and request.command == "GET" and task_route[1] == "logs":
                 self._handle_task_logs(request, task_route[0], parsed)
             elif task_route and request.command == "GET":
@@ -2459,11 +2613,22 @@ class WebConsoleServer:
         cfg = _copy_config(self.config_loader())
         _apply_task_config_overlay(cfg, payload.get("config", {}))
         concurrency = payload.get("concurrency", {})
-        _apply_task_concurrency(cfg, concurrency)
+        _apply_task_concurrency(cfg, concurrency, limits=_global_concurrency_limits(self.config_loader()))
         task_id = self.task_manager.create_task(cfg, name=str(payload.get("name") or "迁移任务"))
         if concurrency and hasattr(self.task_manager, "update_concurrency"):
             self.task_manager.update_concurrency(task_id, concurrency)
         self._send_json(request, {"ok": True, "task_id": task_id, "task": self.task_manager.snapshot(task_id)})
+
+    def _handle_delete_task(self, request, task_id):
+        if not hasattr(self.task_manager, "delete_task"):
+            self._send_json(request, {"ok": False, "error": "task delete is unavailable"}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            deleted_task_id = self.task_manager.delete_task(task_id)
+        except KeyError:
+            self._send_json(request, {"ok": False, "error": "task not found"}, HTTPStatus.NOT_FOUND)
+            return
+        self._send_json(request, {"ok": True, "task_id": deleted_task_id, "tasks": self.task_manager.list_tasks()})
 
     def _handle_get_task(self, request, task_id):
         try:
@@ -2514,7 +2679,9 @@ class WebConsoleServer:
             self._send_json(request, {"ok": False, "error": "concurrency update is unavailable"}, HTTPStatus.BAD_REQUEST)
             return
         try:
-            task = self.task_manager.update_concurrency(task_id, self._read_json(request))
+            payload = self._read_json(request)
+            _validate_task_concurrency(payload, _global_concurrency_limits(self.config_loader()))
+            task = self.task_manager.update_concurrency(task_id, payload)
         except KeyError:
             self._send_json(request, {"ok": False, "error": "task not found"}, HTTPStatus.NOT_FOUND)
             return
@@ -2921,11 +3088,51 @@ def _apply_task_config_overlay(cfg, payload):
             cfg.set(section, str(key), str(value))
 
 
-def _apply_task_concurrency(cfg, concurrency):
+def _global_concurrency_limits(cfg):
+    return {
+        "upload_workers": _cfg_int(cfg, "UPLOAD", "workers", 1),
+        "check_workers": _cfg_int(cfg, "UPLOAD", "checkers", 1),
+        "scan_workers": _cfg_int(cfg, "SCAN", "scan_workers", 1),
+        "multipart_concurrency": _cfg_int(cfg, "UPLOAD", "multipart_concurrency", 1),
+        "max_connections": _cfg_int(cfg, "UPLOAD", "max_connections", 1),
+    }
+
+
+def _cfg_int(cfg, section, option, default):
+    try:
+        return max(1, int(cfg.get(section, option, fallback=str(default)) or default))
+    except (TypeError, ValueError):
+        return max(1, int(default))
+
+
+def _validate_task_concurrency(concurrency, limits):
     if not concurrency:
         return
     if not isinstance(concurrency, dict):
         raise ValueError("concurrency must be an object")
+    labels = {
+        "upload_workers": "上传线程",
+        "check_workers": "检查线程",
+        "scan_workers": "扫描线程",
+        "multipart_concurrency": "分片并发",
+        "max_connections": "最大连接数",
+    }
+    for key, value in concurrency.items():
+        if key not in limits:
+            continue
+        try:
+            clean = max(1, int(value))
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} must be an integer")
+        limit = int(limits.get(key) or 1)
+        if clean > limit:
+            raise ValueError(f"{labels.get(key, key)}不能超过配置中心总控上限 {limit}")
+
+
+def _apply_task_concurrency(cfg, concurrency, limits=None):
+    if not concurrency:
+        return
+    _validate_task_concurrency(concurrency, limits or {})
     mapping = {
         "upload_workers": ("UPLOAD", "workers"),
         "check_workers": ("UPLOAD", "checkers"),
