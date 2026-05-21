@@ -602,9 +602,8 @@ INDEX_HTML = r"""<!doctype html>
       opacity: 0;
       z-index: 1;
     }
-    .fact::after, .panel::after, .metric-card::after, .overview-cell::after,
-    .browser-window::after, .preset-manager::after, .preset-card::after,
-    .preset-group::after, .profile-chip::after, .modal-card::after {
+    .fact::after, .metric-card::after, .overview-cell::after,
+    .preset-card::after, .profile-chip::after, .modal-card::after {
       content: "";
       position: absolute;
       inset: 0;
@@ -623,17 +622,15 @@ INDEX_HTML = r"""<!doctype html>
       position: relative;
       z-index: 2;
     }
-    .fact:hover, .panel:hover, .metric-card:hover, .overview-cell:hover,
-    .browser-window:hover, .preset-manager:hover, .preset-card:hover,
-    .preset-group:hover, .profile-chip:hover, .modal-card:hover {
+    .fact:hover, .metric-card:hover, .overview-cell:hover,
+    .preset-card:hover, .profile-chip:hover, .modal-card:hover {
       border-color: rgba(191,219,254,.32);
       background-color: #20242c;
       box-shadow: 0 26px 80px rgba(15,23,42,.48), 0 0 0 1px rgba(148,163,184,.08);
     }
-    .fact:hover::after, .panel:hover::after, .metric-card:hover::after,
-    .overview-cell:hover::after, .browser-window:hover::after,
-    .preset-manager:hover::after, .preset-card:hover::after,
-    .preset-group:hover::after, .profile-chip:hover::after, .modal-card:hover::after {
+    .fact:hover::after, .metric-card:hover::after,
+    .overview-cell:hover::after, .preset-card:hover::after,
+    .profile-chip:hover::after, .modal-card:hover::after {
       opacity: .36;
     }
     .fact { padding: 15px; }
@@ -788,7 +785,7 @@ INDEX_HTML = r"""<!doctype html>
       box-shadow: 0 24px 80px rgba(37,99,235,.16), inset 0 1px 0 rgba(255,255,255,.08);
     }
     .task-card:hover::before, .task-card.selected::before,
-    .panel:hover::before, .metric-card:hover::before { opacity: .7; }
+    .metric-card:hover::before { opacity: .7; }
     .task-card h3 { margin: 0 0 8px; }
     .task-card-head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start; }
     .task-check { width: 18px; min-height: 18px; margin-top: 3px; accent-color: var(--primary); }

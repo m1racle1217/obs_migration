@@ -982,7 +982,9 @@ class WebConsoleServerTests(unittest.TestCase):
         button_block = html.split("button {", 1)[1].split("}", 1)[0]
         self.assertIn("border-radius: 12px;", button_block)
         self.assertIn("rgba(var(--button-rgb), .065)", button_block)
-        self.assertIn(".browser-window::after", html)
+        self.assertNotIn(".panel:hover::after", html)
+        self.assertNotIn(".browser-window:hover::after", html)
+        self.assertNotIn(".preset-manager:hover::after", html)
         self.assertIn(".preset-card::after", html)
         self.assertIn(".profile-chip:hover::after", html)
         self.assertIn(".explorer-commandbar {\n      display: grid;", html)
