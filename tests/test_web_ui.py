@@ -977,6 +977,11 @@ class WebConsoleServerTests(unittest.TestCase):
         self.assertIn(".login-form { display: flex; flex-direction: column; justify-content: center; gap: 22px; padding: 38px 36px; }", html)
         self.assertIn(".login-form .muted { margin: 0;", html)
         self.assertIn(".login-form label { gap: 11px; }", html)
+        self.assertIn("rgba(var(--task-accent), .48)", html)
+        self.assertIn("rgba(var(--task-accent), .62)", html)
+        self.assertIn("function compactCount", html)
+        self.assertIn("满 · ${waiting}等待", html)
+        self.assertNotIn('未完成 ${unfinished}', html)
         self.assertIn('[data-task-filter="running"]', html)
         self.assertIn("#batch-delete-tasks { --button-rgb", html)
         primary_block = html.split("button.primary {", 1)[1].split("}", 1)[0]

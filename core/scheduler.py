@@ -227,6 +227,20 @@ class Scheduler:
             if thread is not threading.current_thread():
                 thread.join()
 
+    def discard_pending_tasks(self):
+        discarded = 0
+        while True:
+            try:
+                self.task_queue.get_nowait()
+            except queue.Empty:
+                break
+            else:
+                self.task_queue.task_done()
+                discarded += 1
+        if discarded:
+            logging.info("[SCHEDULER] discarded pending stage=%s tasks=%s", self.stage_name, discarded)
+        return discarded
+
     # ================================
     # 获取活跃线程数
     # ================================

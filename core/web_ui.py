@@ -717,21 +717,21 @@ INDEX_HTML = r"""<!doctype html>
       cursor: pointer;
       transition: transform .22s ease, border-color .22s ease, background .22s ease, box-shadow .22s ease;
       background:
-        linear-gradient(90deg, rgba(var(--task-accent), .22) 0%, rgba(var(--task-accent), .08) var(--task-progress), transparent calc(var(--task-progress) + 10%)),
+        linear-gradient(90deg, rgba(var(--task-accent), .48) 0%, rgba(var(--task-accent), .30) var(--task-progress), rgba(255,255,255,.035) var(--task-progress), rgba(255,255,255,.012) 100%),
         var(--panel);
     }
     .task-card:hover {
       transform: translateY(-1px);
       border-color: rgba(255,255,255,.14);
       background:
-        linear-gradient(90deg, rgba(var(--task-accent), .28) 0%, rgba(var(--task-accent), .11) var(--task-progress), transparent calc(var(--task-progress) + 12%)),
+        linear-gradient(90deg, rgba(var(--task-accent), .56) 0%, rgba(var(--task-accent), .34) var(--task-progress), rgba(255,255,255,.045) var(--task-progress), rgba(255,255,255,.016) 100%),
         var(--panel-strong);
       box-shadow: 0 22px 70px rgba(0,0,0,.34);
     }
     .task-card.selected {
       border-color: rgba(255,255,255,.2);
       background:
-        linear-gradient(90deg, rgba(var(--task-accent), .32) 0%, rgba(var(--task-accent), .12) var(--task-progress), transparent calc(var(--task-progress) + 14%)),
+        linear-gradient(90deg, rgba(var(--task-accent), .62) 0%, rgba(var(--task-accent), .38) var(--task-progress), rgba(255,255,255,.055) var(--task-progress), rgba(255,255,255,.018) 100%),
         radial-gradient(circle at 76% 8%, rgba(96,165,250,.24), transparent 34%),
         radial-gradient(circle at 18% 0%, rgba(181,140,255,.16), transparent 32%),
         var(--panel-strong);
@@ -1749,7 +1749,21 @@ INDEX_HTML = r"""<!doctype html>
       const current = Number(queue.current || 0);
       const max = Number(queue.max || 0);
       const unfinished = Number(queue.unfinished || 0);
-      return `${current}${max > 0 ? "/" + max : ""} · 未完成 ${unfinished}`;
+      if (current <= 0 && unfinished <= 0) return "空";
+      const waiting = compactCount(current);
+      if (max > 0 && current >= max) return `满 · ${waiting}等待`;
+      if (unfinished > current) return `${waiting}等待 · ${compactCount(unfinished)}未完`;
+      return `${waiting}等待`;
+    }
+    function compactCount(value) {
+      const number = Math.max(Number(value || 0), 0);
+      if (number < 1000) return String(number);
+      try {
+        return new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 }).format(number);
+      } catch (_error) {
+        if (number >= 10000) return `${(number / 10000).toFixed(number >= 100000 ? 0 : 1).replace(/\.0$/, "")}万`;
+        return `${Math.round(number / 1000)}k`;
+      }
     }
     function formatWorkerMetric(workers) {
       workers = workers || {};

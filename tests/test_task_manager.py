@@ -550,6 +550,24 @@ class SchedulerControlsTests(unittest.TestCase):
         self.assertEqual(processed, [])
         self.assertEqual(task_queue.unfinished_tasks, 1)
 
+    def test_scheduler_discards_pending_tasks_for_immediate_stop_snapshot(self):
+        task_queue = queue.Queue()
+        for index in range(5):
+            task_queue.put({"source_path": f"{index}.txt"})
+
+        scheduler = Scheduler(
+            task_queue,
+            handler=SimpleNamespace(process=lambda task, heartbeat=None, worker_name=None: None),
+            workers=1,
+            stage_name="upload",
+        )
+
+        discarded = scheduler.discard_pending_tasks()
+
+        self.assertEqual(discarded, 5)
+        self.assertEqual(task_queue.qsize(), 0)
+        self.assertEqual(task_queue.unfinished_tasks, 0)
+
 
 class ScannerControlsTests(unittest.TestCase):
     def test_paused_local_scanner_does_not_enqueue_until_resumed(self):

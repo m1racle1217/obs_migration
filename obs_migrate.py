@@ -3577,6 +3577,8 @@ def run_migration(cfg, controls=None):
                 set_status("check", "stopping")
                 if not is_local_single_file:
                     set_status("scan", "stopping")
+                checker_scheduler.discard_pending_tasks()
+                scheduler.discard_pending_tasks()
                 publish_controls_status()
                 return (
                     checker_scheduler.get_active_workers() == 0
