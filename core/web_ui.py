@@ -476,6 +476,8 @@ INDEX_HTML = r"""<!doctype html>
     }
     button, input, select, textarea { font: inherit; }
     button {
+      --button-rgb: 148, 163, 184;
+      --button-rgb-2: 96, 165, 250;
       min-height: 42px;
       border: 1px solid rgba(255,255,255,.08);
       border-radius: 12px;
@@ -483,31 +485,50 @@ INDEX_HTML = r"""<!doctype html>
       font-weight: 680;
       cursor: pointer;
       color: var(--soft);
-      background: rgba(255,255,255,.035);
+      background:
+        linear-gradient(135deg, rgba(var(--button-rgb), .065), rgba(var(--button-rgb-2), .035)),
+        rgba(255,255,255,.024);
       box-shadow: none;
       transition: transform .2s ease, border-color .2s ease, background .2s ease, box-shadow .2s ease, color .2s ease, opacity .2s ease;
     }
     button.primary {
       border-color: rgba(255,255,255,.1);
       color: #dbeafe;
-      background: rgba(255,255,255,.045);
+      background:
+        linear-gradient(135deg, rgba(var(--button-rgb), .11), rgba(var(--button-rgb-2), .06)),
+        rgba(255,255,255,.025);
     }
     button.danger {
-      background: rgba(127,29,29,.12);
+      background:
+        linear-gradient(135deg, rgba(var(--button-rgb), .1), rgba(var(--button-rgb-2), .055)),
+        rgba(127,29,29,.06);
       border-color: rgba(251,113,133,.26);
       color: #fecdd3;
     }
     button:hover:not(:disabled), button.confirm-pending {
       color: #f8fbff;
       border-color: rgba(255,255,255,.24);
-      background: linear-gradient(135deg, rgba(96,165,250,.28), rgba(14,165,233,.18) 48%, rgba(129,140,248,.24));
-      box-shadow: 0 18px 44px rgba(37,99,235,.18), inset 0 1px 0 rgba(255,255,255,.1);
+      background: linear-gradient(135deg, rgba(var(--button-rgb),.28), rgba(var(--button-rgb-2),.18) 54%, rgba(255,255,255,.08));
+      box-shadow: 0 18px 44px rgba(var(--button-rgb-2),.16), inset 0 1px 0 rgba(255,255,255,.1);
       transform: translateY(-1px);
     }
     button.danger:hover:not(:disabled), button.danger.confirm-pending {
       border-color: rgba(251,113,133,.66);
-      background: linear-gradient(135deg, rgba(251,113,133,.22), rgba(96,165,250,.14) 52%, rgba(168,85,247,.18));
+      background: linear-gradient(135deg, rgba(var(--button-rgb),.26), rgba(var(--button-rgb-2),.18) 52%, rgba(255,255,255,.08));
     }
+    #new-task-button, #create-task, [data-task-action="start"], #batch-start-tasks { --button-rgb: 59, 130, 246; --button-rgb-2: 45, 212, 191; }
+    #batch-pause-tasks, [data-task-action="pause"] { --button-rgb: 245, 158, 11; --button-rgb-2: 251, 191, 36; }
+    #batch-resume-tasks, [data-task-action="resume"] { --button-rgb: 139, 92, 246; --button-rgb-2: 96, 165, 250; }
+    #batch-stop-tasks, [data-task-action="stop"] { --button-rgb: 251, 113, 133; --button-rgb-2: 244, 63, 94; }
+    #batch-delete-tasks { --button-rgb: 244, 63, 94; --button-rgb-2: 217, 70, 239; }
+    #refresh-tasks, #refresh-logs, #reload-config, #save-config { --button-rgb: 125, 211, 252; --button-rgb-2: 96, 165, 250; }
+    #logout-button { --button-rgb: 248, 113, 113; --button-rgb-2: 251, 113, 133; }
+    [data-task-filter="all"] { --button-rgb: 129, 140, 248; --button-rgb-2: 181, 140, 255; }
+    [data-task-filter="running"] { --button-rgb: 96, 165, 250; --button-rgb-2: 45, 212, 191; }
+    [data-task-filter="paused"] { --button-rgb: 245, 158, 11; --button-rgb-2: 251, 191, 36; }
+    [data-task-filter="completed"] { --button-rgb: 52, 211, 153; --button-rgb-2: 45, 212, 191; }
+    [data-task-filter="failed"] { --button-rgb: 251, 113, 133; --button-rgb-2: 244, 63, 94; }
+    [data-task-filter="unstarted"] { --button-rgb: 148, 163, 184; --button-rgb-2: 96, 165, 250; }
     button:disabled { opacity: .48; cursor: not-allowed; }
     input, select, textarea {
       width: 100%;
@@ -675,7 +696,7 @@ INDEX_HTML = r"""<!doctype html>
       color: #eaf6ff;
       border-color: rgba(255,255,255,.18);
       background:
-        linear-gradient(135deg, rgba(96,165,250,.2), rgba(181,140,255,.12)),
+        linear-gradient(135deg, rgba(var(--button-rgb),.22), rgba(var(--button-rgb-2),.12)),
         rgba(255,255,255,.045);
     }
     .task-list { display: grid; gap: 10px; }
@@ -688,19 +709,27 @@ INDEX_HTML = r"""<!doctype html>
     }
     .task-editor h2 { margin: 0 0 14px; font-size: 18px; }
     .task-card {
+      --task-progress: 0%;
+      --task-accent: 96,165,250;
       padding: 17px;
       cursor: pointer;
       transition: transform .22s ease, border-color .22s ease, background .22s ease, box-shadow .22s ease;
+      background:
+        linear-gradient(90deg, rgba(var(--task-accent), .22) 0%, rgba(var(--task-accent), .08) var(--task-progress), transparent calc(var(--task-progress) + 10%)),
+        var(--panel);
     }
     .task-card:hover {
       transform: translateY(-1px);
       border-color: rgba(255,255,255,.14);
-      background: var(--panel-strong);
+      background:
+        linear-gradient(90deg, rgba(var(--task-accent), .28) 0%, rgba(var(--task-accent), .11) var(--task-progress), transparent calc(var(--task-progress) + 12%)),
+        var(--panel-strong);
       box-shadow: 0 22px 70px rgba(0,0,0,.34);
     }
     .task-card.selected {
       border-color: rgba(255,255,255,.2);
       background:
+        linear-gradient(90deg, rgba(var(--task-accent), .32) 0%, rgba(var(--task-accent), .12) var(--task-progress), transparent calc(var(--task-progress) + 14%)),
         radial-gradient(circle at 76% 8%, rgba(96,165,250,.24), transparent 34%),
         radial-gradient(circle at 18% 0%, rgba(181,140,255,.16), transparent 32%),
         var(--panel-strong);
@@ -1175,7 +1204,7 @@ INDEX_HTML = r"""<!doctype html>
             <button type="button" data-task-filter="paused">暂停</button>
             <button type="button" data-task-filter="completed">完成</button>
             <button type="button" data-task-filter="failed">报错</button>
-            <button type="button" data-task-filter="stalled">卡住</button>
+            <button type="button" data-task-filter="unstarted">未启动</button>
           </div>
           <div id="task-list" class="task-list" aria-label="任务列表"></div>
         </aside>
@@ -1345,7 +1374,7 @@ INDEX_HTML = r"""<!doctype html>
       paused: "暂停",
       completed: "完成",
       failed: "报错",
-      stalled: "卡住"
+      unstarted: "未启动"
     };
     const CONFIG_SECTION_TITLES = {
       UPLOAD: "传输策略",
@@ -1551,16 +1580,34 @@ INDEX_HTML = r"""<!doctype html>
       const d = task.dashboard || {};
       const workers = d.active_workers || [];
       if (state === "failed" || Number(d.upload_errors || 0) > 0 || Number(d.scan_errors || 0) > 0) return "failed";
-      if (workers.some(worker => worker.is_stalled || Number(worker.stalled_seconds || 0) > 0) || Number(d.stalled_workers || 0) > 0) return "stalled";
+      if (taskNeverStarted(task)) return "unstarted";
+      if (workers.some(worker => worker.is_stalled || Number(worker.stalled_seconds || 0) > 0) || Number(d.stalled_workers || 0) > 0) return "failed";
       if (["paused", "pausing"].includes(state)) return "paused";
-      if (["completed", "stopped", "done"].includes(state)) return "completed";
+      if (["completed", "done"].includes(state) || (state === "stopped" && taskHasStarted(task))) return "completed";
       if (["starting", "running", "stopping"].includes(state)) return "running";
       return "all";
+    }
+    function taskHasStarted(task) {
+      const timestamps = task.timestamps || {};
+      return Boolean(timestamps.started_at || timestamps.finished_at);
+    }
+    function taskNeverStarted(task) {
+      const state = String(task.state || "").toLowerCase();
+      return ["idle", "created", "pending"].includes(state) || (state === "stopped" && !taskHasStarted(task));
+    }
+    function taskAccent(task) {
+      const bucket = taskBucket(task);
+      if (bucket === "running") return "96,165,250";
+      if (bucket === "paused") return "245,158,11";
+      if (bucket === "failed") return "251,113,133";
+      if (bucket === "completed") return "52,211,153";
+      if (bucket === "unstarted") return "148,163,184";
+      return "139,92,246";
     }
     function renderTaskFilters(tasks) {
       const tabs = document.getElementById("task-state-tabs");
       if (!tabs) return;
-      const counts = { all: tasks.length, running: 0, paused: 0, completed: 0, failed: 0, stalled: 0 };
+      const counts = { all: tasks.length, running: 0, paused: 0, completed: 0, failed: 0, unstarted: 0 };
       tasks.forEach(task => {
         const bucket = taskBucket(task);
         if (counts[bucket] !== undefined) counts[bucket] += 1;
@@ -1576,7 +1623,7 @@ INDEX_HTML = r"""<!doctype html>
       renderDashboardOverview(counts);
     }
     function renderDashboardOverview(counts) {
-      const attention = (counts.failed || 0) + (counts.stalled || 0) + (counts.paused || 0);
+      const attention = (counts.failed || 0) + (counts.paused || 0) + (counts.unstarted || 0);
       const state = counts.running > 0 ? "迁移中" : attention > 0 ? "待处理" : counts.all > 0 ? "已待命" : "待命";
       const values = {
         "overview-total": counts.all || 0,
@@ -1611,6 +1658,8 @@ INDEX_HTML = r"""<!doctype html>
         const card = document.createElement("article");
         card.className = "task-card" + (task.task_id === selectedTaskId ? " selected" : "");
         card.dataset.taskId = taskId;
+        card.style.setProperty("--task-progress", `${percent}%`);
+        card.style.setProperty("--task-accent", taskAccent(task));
         card.innerHTML = `
           <div class="task-card-head">
             <input class="task-check" type="checkbox" data-task-id="${escapeHtml(taskId)}" aria-label="选择任务 ${escapeHtml(task.name || taskId)}" ${selectedTaskIds.has(taskId) ? "checked" : ""}>
@@ -1622,7 +1671,7 @@ INDEX_HTML = r"""<!doctype html>
           <div class="progress-line"><span style="width:${percent}%"></span></div>
           <p>${escapeHtml(task.state || "unknown")} · ${percent.toFixed(1)}% · 错误 ${(task.dashboard && task.dashboard.upload_errors) || 0}</p>
           <div class="task-card-actions" aria-label="任务控制">
-            <button class="primary" type="button" data-task-action="start" data-task-id="${escapeHtml(taskId)}">启动</button>
+            <button class="primary task-action-start" type="button" data-task-action="start" data-task-id="${escapeHtml(taskId)}">启动</button>
             <button type="button" data-task-action="pause" data-task-id="${escapeHtml(taskId)}">暂停</button>
             <button type="button" data-task-action="resume" data-task-id="${escapeHtml(taskId)}">继续</button>
             <button class="danger" type="button" data-task-action="stop" data-task-id="${escapeHtml(taskId)}">停止</button>

@@ -772,7 +772,7 @@ class WebConsoleServerTests(unittest.TestCase):
             "暂停",
             "完成",
             "报错",
-            "卡住",
+            "未启动",
             "日志 / 报告",
             "实时任务日志",
             "刷新日志",
@@ -857,6 +857,9 @@ class WebConsoleServerTests(unittest.TestCase):
             'function updateDashboardLayout',
             'id="task-state-tabs"',
             'id="task-detail-panel"',
+            'data-task-filter="unstarted"',
+            'function taskNeverStarted',
+            'card.style.setProperty("--task-progress"',
             'class="task-detail-panel task-detail-inline hidden"',
             'taskDetailExpanded',
             'function showTaskDetailPanel',
@@ -965,11 +968,13 @@ class WebConsoleServerTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertIn("button:hover:not(:disabled)", html)
-        self.assertIn("linear-gradient(135deg, rgba(96,165,250,.28)", html)
+        self.assertIn("linear-gradient(135deg, rgba(var(--button-rgb),.28)", html)
         self.assertIn("font-size: 13px;", html)
         button_block = html.split("button {", 1)[1].split("}", 1)[0]
         self.assertIn("border-radius: 12px;", button_block)
-        self.assertIn("background: rgba(255,255,255,.035);", button_block)
+        self.assertIn("rgba(var(--button-rgb), .065)", button_block)
+        self.assertIn('[data-task-filter="running"]', html)
+        self.assertIn("#batch-delete-tasks { --button-rgb", html)
         primary_block = html.split("button.primary {", 1)[1].split("}", 1)[0]
         self.assertNotIn("#eff6ff", primary_block)
 
