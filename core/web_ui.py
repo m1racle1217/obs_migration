@@ -783,6 +783,8 @@ INDEX_HTML = r"""<!doctype html>
     .explorer-addressbar { display: grid; grid-template-columns: auto minmax(180px, 1fr) minmax(120px, 210px) auto; }
     .explorer-addressbar input, .explorer-commandbar input, .explorer-commandbar select { min-height: 36px; border-radius: 9px; }
     .explorer-commandbar select { width: auto; min-width: 140px; }
+    .inline-select { display: inline-flex; align-items: center; gap: 8px; color: #bfdbfe; font-size: 12px; font-weight: 800; }
+    .inline-select select { color: var(--text); font-size: 13px; font-weight: 650; }
     .explorer-search { width: min(260px, 32vw); margin-left: auto; }
     .explorer-addressbar input { width: 100%; }
     .explorer-mode-note {
@@ -1008,6 +1010,7 @@ INDEX_HTML = r"""<!doctype html>
 
       <section id="config" class="panel" data-page="config">
         <h2>配置中心</h2>
+        <p class="muted">存储位置用于管理源存储位置、目标存储位置和位置预设；本地路径与 OBS/S3 对象存储会按存储类型自动切换。</p>
         <div class="toolbar">
           <button id="reload-config" type="button">重新加载配置</button>
           <button id="save-config" class="primary" type="button">保存配置</button>
@@ -1048,13 +1051,15 @@ INDEX_HTML = r"""<!doctype html>
             <button id="browser-refresh" type="button" title="刷新">刷新</button>
             <select id="browser-scope" aria-label="位置">
               <option value="local">本地</option>
-              <option value="SOURCE">SOURCE 远端</option>
-              <option value="TARGET">TARGET 远端</option>
+              <option value="SOURCE">源端配置</option>
+              <option value="TARGET">目标端配置</option>
             </select>
-            <select id="browser-profile-select" aria-label="浏览配置">
-              <option value="">浏览配置</option>
-            </select>
-            <button id="browser-save-profile" type="button">保存当前位置</button>
+            <label class="inline-select">选择存储位置
+              <select id="browser-profile-select" aria-label="选择存储位置">
+                <option value="">选择存储位置</option>
+              </select>
+            </label>
+            <button id="browser-save-profile" type="button">保存为存储位置</button>
             <input id="browser-filter" class="explorer-search" placeholder="搜索当前文件夹">
           </div>
           <div class="explorer-addressbar">
@@ -1072,12 +1077,12 @@ INDEX_HTML = r"""<!doctype html>
               <h3>对象存储</h3>
               <button type="button" data-browser-scope="SOURCE" data-browser-path="">SOURCE 源端</button>
               <button type="button" data-browser-scope="TARGET" data-browser-path="">TARGET 目的端</button>
-              <h3>端点 / 路径库</h3>
+              <h3>存储位置库</h3>
               <div id="profile-form" class="profile-form">
-                <input id="profile-name" placeholder="配置名称，例如 prod-source">
-                <button id="profile-save-current" type="button">保存当前浏览配置</button>
+                <input id="profile-name" placeholder="存储位置名称，例如 prod-source">
+                <button id="profile-save-current" type="button">保存当前存储位置</button>
               </div>
-              <div id="profile-list" class="profile-list" aria-label="浏览配置列表"></div>
+              <div id="profile-list" class="profile-list" aria-label="存储位置列表"></div>
             </aside>
             <div class="explorer-main">
               <div id="browser-breadcrumbs" class="explorer-breadcrumbs" aria-label="当前位置"></div>
@@ -1134,6 +1139,27 @@ INDEX_HTML = r"""<!doctype html>
       config: "配置中心",
       browser: "目录浏览",
       logs: "日志 / 报告"
+    };
+    const CONFIG_SECTION_TITLES = {
+      SOURCE: "源存储位置",
+      TARGET: "目标存储位置",
+      UPLOAD: "传输策略",
+      SCAN: "扫描策略",
+      CHECK: "校验策略",
+      PATH: "路径与报告",
+      UI: "CLI 界面",
+      WEB_UI: "Web 控制台",
+      BROWSER_PROFILES: "位置预设"
+    };
+    const CONFIG_FIELD_TITLES = {
+      type: "存储类型",
+      selection_mode: "选择模式",
+      path: "本地路径",
+      ak: "AccessKey",
+      sk: "SecretKey",
+      endpoint: "Endpoint",
+      bucket: "Bucket",
+      prefix: "Prefix"
     };
     const taskList = document.getElementById("task-list");
     const taskOutput = document.getElementById("task-output");
@@ -1532,7 +1558,7 @@ INDEX_HTML = r"""<!doctype html>
         tab.setAttribute("role", "tab");
         tab.setAttribute("aria-selected", index === 0 ? "true" : "false");
         tab.setAttribute("aria-controls", "config-panel-" + section);
-        tab.textContent = section;
+        tab.textContent = configSectionTitle(section);
         tab.addEventListener("click", () => selectConfigTab(section));
         tabList.appendChild(tab);
 
@@ -1543,20 +1569,82 @@ INDEX_HTML = r"""<!doctype html>
         fieldset.setAttribute("role", "tabpanel");
         if (index !== 0) fieldset.hidden = true;
         const legend = document.createElement("legend");
-        legend.textContent = section;
+        legend.textContent = configSectionTitle(section);
         fieldset.appendChild(legend);
         Object.entries(values || {}).forEach(([key, meta]) => {
-          const label = document.createElement("label");
-          label.textContent = section + "." + key;
-          const input = document.createElement("input");
-          input.name = "config-field";
-          input.dataset.section = section;
-          input.dataset.key = key;
-          input.value = meta && meta.value !== undefined ? meta.value : "";
-          label.appendChild(input);
-          fieldset.appendChild(label);
+          fieldset.appendChild(createConfigField(section, key, meta));
         });
         configForm.appendChild(fieldset);
+        updateStorageFieldVisibility(section);
+      });
+    }
+    function configSectionTitle(section) {
+      return CONFIG_SECTION_TITLES[section] || section;
+    }
+    function configFieldTitle(section, key) {
+      const base = CONFIG_FIELD_TITLES[key] || key;
+      if (key === "path" && section === "SOURCE") return "源端本地路径";
+      if (key === "path" && section === "TARGET") return "目标本地目录";
+      return base;
+    }
+    function storageFieldKind(section, key) {
+      if (!["SOURCE", "TARGET"].includes(section)) return "";
+      if (key === "type") return "common";
+      if (key === "path" || key === "selection_mode") return "local";
+      if (["ak", "sk", "endpoint", "bucket", "prefix"].includes(key)) return "s3";
+      return "common";
+    }
+    function createConfigField(section, key, meta) {
+      const label = document.createElement("label");
+      label.textContent = configFieldTitle(section, key);
+      const kind = storageFieldKind(section, key);
+      if (kind) {
+        label.setAttribute("data-storage-group", section);
+        label.setAttribute("data-storage-kind", kind);
+      }
+      let field;
+      if (key === "type" && ["SOURCE", "TARGET"].includes(section)) {
+        field = document.createElement("select");
+        [
+          ["local", "本地路径"],
+          ["s3", "OBS/S3 对象存储"]
+        ].forEach(([value, text]) => {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = text;
+          field.appendChild(option);
+        });
+        field.addEventListener("change", () => updateStorageFieldVisibility(section));
+      } else if (key === "selection_mode" && section === "SOURCE") {
+        field = document.createElement("select");
+        [
+          ["directory", "单目录模式"],
+          ["list", "迁移列表模式"]
+        ].forEach(([value, text]) => {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = text;
+          field.appendChild(option);
+        });
+      } else {
+        field = document.createElement("input");
+      }
+      field.name = "config-field";
+      field.dataset.section = section;
+      field.dataset.key = key;
+      field.value = meta && meta.value !== undefined ? meta.value : "";
+      label.appendChild(field);
+      return label;
+    }
+    function updateStorageFieldVisibility(section) {
+      if (!["SOURCE", "TARGET"].includes(section)) return;
+      const typeField = configForm.querySelector(`[name="config-field"][data-section="${section}"][data-key="type"]`);
+      const storageType = String((typeField && typeField.value) || "local").toLowerCase();
+      const isLocal = storageType === "local";
+      configForm.querySelectorAll(`[data-storage-group="${section}"]`).forEach(label => {
+        const kind = label.dataset.storageKind || "common";
+        const visible = kind === "common" || (kind === "local" && isLocal) || (kind === "s3" && !isLocal);
+        label.classList.toggle("hidden", !visible);
       });
     }
     function selectConfigTab(section) {
@@ -1568,7 +1656,7 @@ INDEX_HTML = r"""<!doctype html>
       configForm.querySelectorAll(".config-panel").forEach(panel => {
         panel.hidden = panel.dataset.section !== section;
       });
-      setStatus(section + " 配置已打开");
+      setStatus(configSectionTitle(section) + " 已打开");
     }
     function collectConfigPayload() {
       const payload = {};
@@ -1629,21 +1717,34 @@ INDEX_HTML = r"""<!doctype html>
       const list = document.getElementById("profile-list");
       if (!select || !list) return;
       const current = select.value;
-      select.innerHTML = "<option value=''>浏览配置</option>";
+      select.innerHTML = "<option value=''>选择存储位置</option>";
       list.innerHTML = "";
       browserProfiles.forEach(profile => {
         const option = document.createElement("option");
         option.value = profile.id;
-        option.textContent = `${profile.name || profile.id} · ${profile.role || profile.section || profile.type || ""}`;
+        option.textContent = formatBrowserProfileLabel(profile);
         select.appendChild(option);
         const chip = document.createElement("div");
         chip.className = "profile-chip";
-        chip.textContent = `${profile.name || profile.id} · ${profile.path || profile.prefix || profile.bucket || ""}`;
+        chip.textContent = `${formatBrowserProfileLabel(profile)} · ${browserProfilePath(profile) || "根目录"}`;
         chip.addEventListener("click", () => applyBrowserProfile(profile.id));
         list.appendChild(chip);
       });
       if (current && browserProfiles.some(profile => profile.id === current)) select.value = current;
-      if (!list.innerHTML) list.innerHTML = "<p class='muted'>暂无保存的浏览配置。</p>";
+      if (!list.innerHTML) list.innerHTML = "<p class='muted'>暂无保存的存储位置。</p>";
+    }
+    function formatBrowserProfileLabel(profile) {
+      const roleMap = { source: "源端", target: "目标端", both: "通用" };
+      const typeMap = { local: "本地", remote: "OBS/S3", obs: "OBS/S3", s3: "OBS/S3" };
+      const name = profile.name || profile.id || "未命名存储位置";
+      const role = roleMap[profile.role] || (profile.section === "TARGET" ? "目标端" : "源端");
+      const type = typeMap[profile.type] || "本地";
+      return `${name} · ${role} · ${type}`;
+    }
+    function browserProfilePath(profile) {
+      if (!profile) return "";
+      if (profile.path) return profile.path;
+      return [profile.bucket, profile.prefix].filter(Boolean).join("/");
     }
     function applyBrowserProfile(profileId) {
       const profile = browserProfiles.find(item => item.id === profileId);
@@ -1678,7 +1779,7 @@ INDEX_HTML = r"""<!doctype html>
       renderBrowserProfiles();
       document.getElementById("browser-profile-select").value = profile.id;
       if (nameInput) nameInput.value = "";
-      setStatus("浏览配置已保存");
+      setStatus("存储位置已保存");
     }
     function updateBrowserModeChrome() {
       const sourceMode = browserMode !== "target";
